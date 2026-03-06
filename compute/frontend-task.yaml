@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Frontend ECS Task Definition'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  ECSTaskExecutionRoleArn:
+    Description: '[CRITICAL] ARN of the ECS Task Execution Role, which allows ECS to pull images from ECR and write logs to CloudWatch. Exported from the ecs-task-role stack.'
+    Type: String
+
+  ECSTaskRoleArn:
+    Description: '[CRITICAL] ARN of the ECS Task Role, which grants the running container permissions to call AWS services (S3, SQS, etc.). Exported from the ecs-task-role stack.'
+    Type: String
+
+  FrontendRepositoryUri:
+    Description: '[CRITICAL] URI of the ECR repository containing the frontend container image (without tag). Exported from the ECR stack.'
+    Type: String
+
+  FrontendLogGroupName:
+    Description: '[CRITICAL] CloudWatch Log Group name for frontend container logs. Exported from the cloudwatch stack.'
+    Type: String
+
+  FrontendImageTag:
+    Description: '[IMPORTANT] Docker image tag to deploy for the frontend. Default is "latest" — use a specific semantic version (e.g. v1.2.3) in production for reproducible deployments.'
+    Type: String
+    Default: latest
+
+  FrontendCPU:
+    Description: '[IMPORTANT] CPU units allocated to the frontend task (1 vCPU = 1024 units). Valid combinations are defined by Fargate: 256 CPU requires 512-2048 MB memory.'
+    Type: String
+    Default: '256'
+    AllowedValues: ['256', '512', '1024', '2048', '4096']
+
+  FrontendMemory:
+    Description: '[IMPORTANT] Memory (MiB) allocated to the frontend task. Must be a valid Fargate combination for the chosen CPU. Increase if containers are OOMKilled.'
+    Type: String
+    Default: '512'
+    AllowedValues: ['512', '1024', '2048', '4096', '8192', '16384']
+
+  FrontendContainerPort:
+    Description: '[IMPORTANT] Port the frontend container listens on. Must match the port configured in the frontend application and the security group FrontendAppPort.'
+    Type: Number
+    Default: 80
+    MinValue: 1
+    MaxValue: 65535
+
+  FrontendNetworkMode:
+    Description: '[OPTIONAL] Docker networking mode for the frontend task. awsvpc gives each task its own ENI and is required for Fargate. bridge is used for EC2 launch type without ENI-based networking.'
+    Type: String
+    Default: awsvpc
+    AllowedValues: [awsvpc, bridge, host, none]
+
+  FrontendLogStreamPrefix:
+    Description: '[OPTIONAL] Log stream prefix for frontend container logs in CloudWatch. Helps filter logs per service when multiple containers share a log group.'
+    Type: String
+    Default: frontend
+
+Resources:
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-frontend-task
+      Cpu: !Ref FrontendCPU
+      Memory: !Ref FrontendMemory
+      NetworkMode: !Ref FrontendNetworkMode
+      RequiresCompatibilities:
+        - EC2
+        - FARGATE
+      ExecutionRoleArn: !Ref ECSTaskExecutionRoleArn
+      TaskRoleArn: !Ref ECSTaskRoleArn
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Sub ${FrontendRepositoryUri}:${FrontendImageTag}
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref FrontendContainerPort
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref FrontendLogGroupName
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: !Ref FrontendLogStreamPrefix
+
+Outputs:
+  FrontendTaskDefinitionArn:
+    Description: ARN of the Frontend Task Definition
+    Value: !Ref FrontendTaskDefinition
+    Export:
+      Name: !Sub ${EnvironmentName}-FrontendTaskDefinitionArn

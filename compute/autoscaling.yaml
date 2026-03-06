@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Auto Scaling Group for ECS Cluster Instances'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  LaunchTemplateId:
+    Description: '[CRITICAL] ID of the EC2 Launch Template for the ECS instances. Exported from the launch-template stack.'
+    Type: String
+
+  PrivateAppSubnet1:
+    Description: '[CRITICAL] First private application subnet ID for ECS instances. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+
+  PrivateAppSubnet2:
+    Description: '[CRITICAL] Second private application subnet ID for ECS instances. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+
+  PrivateAppSubnet3:
+    Description: '[CRITICAL] Third private application subnet ID for ECS instances. Only used when NumberOfAZs is 3.'
+    Type: String
+    Default: ''
+
+  NumberOfAZs:
+    Description: '[IMPORTANT] Number of AZs deployed. Must match the VPC stack setting.'
+    Type: Number
+    Default: 3
+    AllowedValues: [2, 3]
+
+  ECSClusterName:
+    Description: '[CRITICAL] Name of the ECS cluster to associate the capacity provider with. Exported from the ecs-cluster stack.'
+    Type: String
+
+  ASGMinSize:
+    Description: '[IMPORTANT] Minimum number of EC2 instances in the Auto Scaling Group. Set to at least 2 for high availability in production. Setting to 0 reduces cost but removes all compute capacity.'
+    Type: Number
+    Default: 2
+    MinValue: 0
+    MaxValue: 100
+
+  ASGMaxSize:
+    Description: '[IMPORTANT] Maximum number of EC2 instances the Auto Scaling Group can scale out to. Set based on your peak load requirements and cost limits.'
+    Type: Number
+    Default: 6
+    MinValue: 1
+    MaxValue: 100
+
+  ASGDesiredCapacity:
+    Description: '[IMPORTANT] Desired number of EC2 instances at stack creation time. ECS Managed Scaling will adjust this automatically based on task demand.'
+    Type: Number
+    Default: 3
+    MinValue: 0
+    MaxValue: 100
+
+  HealthCheckType:
+    Description: '[OPTIONAL] Health check type for the Auto Scaling Group. EC2 checks instance status; ELB checks load balancer health. EC2 is recommended for ECS clusters.'
+    Type: String
+    Default: EC2
+    AllowedValues: [EC2, ELB]
+
+  HealthCheckGracePeriod:
+    Description: '[OPTIONAL] Time in seconds after an instance comes into service before health checks start. Increase if instances take longer to initialise ECS agent registration.'
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 7200
+
+  CapacityProviderTargetCapacity:
+    Description: '[OPTIONAL] Target utilisation percentage (1-100) for ECS Managed Scaling. At 100 the provider tries to keep instances fully utilised before launching new ones. Lower values increase headroom.'
+    Type: Number
+    Default: 100
+    MinValue: 1
+    MaxValue: 100
+
+  ManagedTerminationProtection:
+    Description: '[OPTIONAL] Enable ECS Managed Termination Protection. When ENABLED, the provider protects instances running tasks from being terminated during scale-in. Requires CapacityProviderTargetCapacity < 100.'
+    Type: String
+    Default: DISABLED
+    AllowedValues: [ENABLED, DISABLED]
+
+Conditions:
+  Has3AZs: !Equals [!Ref NumberOfAZs, 3]
+
+Resources:
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !If
+        - Has3AZs
+        - - !Ref PrivateAppSubnet1
+          - !Ref PrivateAppSubnet2
+          - !Ref PrivateAppSubnet3
+        - - !Ref PrivateAppSubnet1
+          - !Ref PrivateAppSubnet2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplateId
+        Version: $Latest
+      MinSize: !Ref ASGMinSize
+      MaxSize: !Ref ASGMaxSize
+      DesiredCapacity: !Ref ASGDesiredCapacity
+      HealthCheckType: !Ref HealthCheckType
+      HealthCheckGracePeriod: !Ref HealthCheckGracePeriod
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-ecs-asg
+          PropagateAtLaunch: true
+
+  ECSCapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      Name: !Sub ${EnvironmentName}-ec2-capacity-provider
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref AutoScalingGroup
+        ManagedScaling:
+          Status: ENABLED
+          TargetCapacity: !Ref CapacityProviderTargetCapacity
+        ManagedTerminationProtection: !Ref ManagedTerminationProtection
+
+  ECSClusterCapacityProviderAssociations:
+    Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Properties:
+      Cluster: !Ref ECSClusterName
+      CapacityProviders:
+        - !Ref ECSCapacityProvider
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: !Ref ECSCapacityProvider
+          Weight: 1
+
+Outputs:
+  AutoScalingGroupName:
+    Description: Name of the Auto Scaling Group
+    Value: !Ref AutoScalingGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-AutoScalingGroupName
+  ECSCapacityProviderName:
+    Description: Name of the ECS Capacity Provider
+    Value: !Ref ECSCapacityProvider
+    Export:
+      Name: !Sub ${EnvironmentName}-ECSCapacityProviderName

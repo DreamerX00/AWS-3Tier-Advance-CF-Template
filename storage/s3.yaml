@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: S3 Buckets for Application Assets and ALB Access Logs'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  AssetsBucketEncryptionAlgorithm:
+    Description: '[OPTIONAL] Server-side encryption for the application assets bucket. AES256 uses AWS-managed keys. Use aws:kms to use a Customer Managed Key for stricter key management and audit trails.'
+    Type: String
+    Default: AES256
+    AllowedValues: [AES256, aws:kms]
+
+  AssetsNoncurrentVersionExpiryDays:
+    Description: '[OPTIONAL] Days after which non-current (overwritten/deleted) object versions are expired from the assets bucket. Reduces storage costs. Set higher for longer version history.'
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 3650
+
+  AssetsTransitionDays:
+    Description: '[OPTIONAL] Days after which objects in the assets bucket transition to a cheaper storage class (see AssetsTransitionStorageClass). E.g. move old frontend bundles to STANDARD_IA after 30 days.'
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 3650
+
+  AssetsTransitionStorageClass:
+    Description: '[OPTIONAL] S3 storage class to transition assets to after AssetsTransitionDays. STANDARD_IA is 40% cheaper than S3 Standard for infrequently accessed objects. GLACIER is cheapest for archival.'
+    Type: String
+    Default: STANDARD_IA
+    AllowedValues: [STANDARD_IA, ONEZONE_IA, INTELLIGENT_TIERING, GLACIER, DEEP_ARCHIVE]
+
+  AccessLogsBucketEncryptionAlgorithm:
+    Description: '[OPTIONAL] Server-side encryption for the ALB access logs bucket. AES256 is sufficient for most compliance requirements. Use aws:kms if your security policy mandates CMK encryption for all S3 data.'
+    Type: String
+    Default: AES256
+    AllowedValues: [AES256, aws:kms]
+
+  EnableAssetsVersioning:
+    Description: '[OPTIONAL] Enable versioning on the assets S3 bucket. Allows recovery of previous file versions. Disable only in cost-sensitive dev environments where rollback is not needed.'
+    Type: String
+    Default: Enabled
+    AllowedValues: [Enabled, Suspended]
+
+Mappings:
+  ELBAccountMap:
+    us-east-1:
+      AccountId: '127311923021'
+    us-east-2:
+      AccountId: '033677994240'
+    us-west-1:
+      AccountId: '027434742980'
+    us-west-2:
+      AccountId: '797873946194'
+    af-south-1:
+      AccountId: '098369216593'
+    ap-east-1:
+      AccountId: '754344448648'
+    ap-south-1:
+      AccountId: '718504428378'
+    ap-south-2:
+      AccountId: '076674570225'
+    ap-southeast-1:
+      AccountId: '114774131450'
+    ap-southeast-2:
+      AccountId: '783225319266'
+    ap-southeast-3:
+      AccountId: '589379963580'
+    ap-northeast-1:
+      AccountId: '582318560864'
+    ap-northeast-2:
+      AccountId: '600734575887'
+    ap-northeast-3:
+      AccountId: '383597477331'
+    ca-central-1:
+      AccountId: '985666609251'
+    eu-central-1:
+      AccountId: '054676820928'
+    eu-central-2:
+      AccountId: '897822967062'
+    eu-west-1:
+      AccountId: '156460612806'
+    eu-west-2:
+      AccountId: '652711504416'
+    eu-west-3:
+      AccountId: '009996457667'
+    eu-south-1:
+      AccountId: '635631232127'
+    eu-south-2:
+      AccountId: '578916191283'
+    eu-north-1:
+      AccountId: '897822967062'
+    me-south-1:
+      AccountId: '076674570225'
+    me-central-1:
+      AccountId: '331564708691'
+    sa-east-1:
+      AccountId: '507241528517'
+
+Resources:
+  AssetsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${EnvironmentName}-app-assets-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: !Ref AssetsBucketEncryptionAlgorithm
+      VersioningConfiguration:
+        Status: !Ref EnableAssetsVersioning
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: !Ref AssetsNoncurrentVersionExpiryDays
+          - Id: TransitionToIA
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: !Ref AssetsTransitionDays
+                StorageClass: !Ref AssetsTransitionStorageClass
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-assets-bucket
+
+  AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${EnvironmentName}-alb-access-logs-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: !Ref AccessLogsBucketEncryptionAlgorithm
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-alb-access-logs
+
+  AccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AccessLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ELBAccountWrite
+            Effect: Allow
+            Principal:
+              AWS: !Sub
+                - 'arn:aws:iam::${ELBAccount}:root'
+                - ELBAccount: !FindInMap [ELBAccountMap, !Ref 'AWS::Region', AccountId]
+            Action: s3:PutObject
+            Resource: !Sub ${AccessLogsBucket.Arn}/AWSLogs/${AWS::AccountId}/*
+          - Sid: AWSLogDeliveryAclCheck
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt AccessLogsBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref 'AWS::AccountId'
+          - Sid: AWSLogDeliveryWrite
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub ${AccessLogsBucket.Arn}/AWSLogs/${AWS::AccountId}/*
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: !Ref 'AWS::AccountId'
+
+Outputs:
+  AssetsBucketName:
+    Description: Application Assets S3 Bucket Name
+    Value: !Ref AssetsBucket
+    Export:
+      Name: !Sub ${EnvironmentName}-AssetsBucketName
+  AssetsBucketArn:
+    Description: ARN of the Application Assets S3 Bucket
+    Value: !GetAtt AssetsBucket.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-AssetsBucketArn
+  AccessLogsBucketName:
+    Description: ALB Access Logs S3 Bucket Name
+    Value: !Ref AccessLogsBucket
+    Export:
+      Name: !Sub ${EnvironmentName}-AccessLogsBucketName

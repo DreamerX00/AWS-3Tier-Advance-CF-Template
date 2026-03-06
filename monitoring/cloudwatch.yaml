@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: CloudWatch Log Groups, Alarms and Dashboards'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  LogRetentionDays:
+    Description: '[IMPORTANT] Number of days to retain application logs in CloudWatch. 30 days is the default. Increase for audit/compliance (e.g. 90 or 365). Setting to 0 retains logs indefinitely (not recommended — incurs unbounded cost).'
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+
+  FrontendLogGroupSuffix:
+    Description: '[OPTIONAL] Suffix appended to the CloudWatch log group path for the frontend service. Changing this after deployment will create a new log group and orphan the old one.'
+    Type: String
+    Default: frontend
+
+  BackendLogGroupSuffix:
+    Description: '[OPTIONAL] Suffix appended to the CloudWatch log group path for the backend service. Changing this after deployment will create a new log group and orphan the old one.'
+    Type: String
+    Default: backend
+
+Resources:
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}-${FrontendLogGroupSuffix}
+      RetentionInDays: !Ref LogRetentionDays
+
+  BackendLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}-${BackendLogGroupSuffix}
+      RetentionInDays: !Ref LogRetentionDays
+
+Outputs:
+  FrontendLogGroupName:
+    Description: Frontend Log Group Name
+    Value: !Ref FrontendLogGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-FrontendLogGroupName
+  BackendLogGroupName:
+    Description: Backend Log Group Name
+    Value: !Ref BackendLogGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-BackendLogGroupName

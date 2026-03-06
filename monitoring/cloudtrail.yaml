@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: CloudTrail for Audit Logging'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  IsMultiRegionTrail:
+    Description: '[IMPORTANT] Enable multi-region trail so events from all AWS regions are captured in one trail. Strongly recommended for production. Disable only in dev to reduce cross-region logging costs.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnableLogFileValidation:
+    Description: '[IMPORTANT] Enable digest files to validate that CloudTrail log files have not been tampered with. Required for compliance (SOC2, PCI-DSS, HIPAA). Keep true always.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  IncludeGlobalServiceEvents:
+    Description: '[OPTIONAL] Include events from global services (e.g. IAM, STS, CloudFront) in the trail. Required to get complete API audit coverage. Disable only when multi-region trail is false and cost is a concern.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  TrailBucketEncryptionAlgorithm:
+    Description: '[OPTIONAL] Server-side encryption algorithm for the CloudTrail S3 bucket. AES256 uses AWS-managed keys. Use aws:kms to use a Customer Managed Key (CMK) for stricter access control.'
+    Type: String
+    Default: AES256
+    AllowedValues: [AES256, aws:kms]
+
+  IsLogging:
+    Description: '[IMPORTANT] Whether the trail is actively recording API calls. Set to false to temporarily pause logging (e.g. during maintenance). Should always be true in production.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+Resources:
+  CloudTrailBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${EnvironmentName}-cloudtrail-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: !Ref TrailBucketEncryptionAlgorithm
+      VersioningConfiguration:
+        Status: Enabled
+
+  CloudTrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CloudTrailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt CloudTrailBucket.Arn
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub ${CloudTrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+
+  Trail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: CloudTrailBucketPolicy
+    Properties:
+      TrailName: !Sub ${EnvironmentName}-trail
+      S3BucketName: !Ref CloudTrailBucket
+      IsLogging: !Ref IsLogging
+      IsMultiRegionTrail: !Ref IsMultiRegionTrail
+      IncludeGlobalServiceEvents: !Ref IncludeGlobalServiceEvents
+      EnableLogFileValidation: !Ref EnableLogFileValidation
+
+Outputs:
+  TrailArn:
+    Description: ARN of the CloudTrail
+    Value: !GetAtt Trail.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-TrailArn
+  CloudTrailBucketName:
+    Description: S3 bucket name where CloudTrail logs are stored
+    Value: !Ref CloudTrailBucket
+    Export:
+      Name: !Sub ${EnvironmentName}-CloudTrailBucketName

@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Internal Application Load Balancer'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  PrivateAppSubnet1:
+    Description: '[CRITICAL] First private application subnet ID for the Internal ALB. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+
+  PrivateAppSubnet2:
+    Description: '[CRITICAL] Second private application subnet ID for the Internal ALB. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+
+  PrivateAppSubnet3:
+    Description: '[CRITICAL] Third private application subnet ID for the Internal ALB. Only used when NumberOfAZs is 3.'
+    Type: String
+    Default: ''
+
+  NumberOfAZs:
+    Description: '[IMPORTANT] Number of AZs deployed. Must match the VPC stack setting.'
+    Type: Number
+    Default: 3
+    AllowedValues: [2, 3]
+
+  InternalALBSecurityGroupId:
+    Description: '[CRITICAL] Security Group ID for the Internal ALB. Allows traffic only from frontend security group. Exported from the security-groups stack.'
+    Type: AWS::EC2::SecurityGroup::Id
+
+  InternalALBIdleTimeout:
+    Description: '[OPTIONAL] Idle connection timeout in seconds for the internal ALB. Increase for backend APIs with long-running operations (e.g. batch processing).'
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 4000
+
+  InternalALBDeletionProtection:
+    Description: '[IMPORTANT] Enable deletion protection on the Internal ALB. When true, it cannot be deleted until protection is disabled first. Keep true in production.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  InternalALBHTTP2Enabled:
+    Description: '[OPTIONAL] Enable HTTP/2 support on the Internal ALB. Improves performance for backend-to-backend communication. Disable only for legacy compatibility.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  InternalALBDropInvalidHeaders:
+    Description: '[IMPORTANT] Drop HTTP requests with invalid headers on the Internal ALB. Prevents header-injection attacks even within the internal network.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  InternalALBListenerPort:
+    Description: '[OPTIONAL] Port for the Internal ALB HTTP listener. Default is 80. Matches the BackendAppPort unless your backend uses a different internal routing port.'
+    Type: Number
+    Default: 80
+    MinValue: 1
+    MaxValue: 65535
+
+Conditions:
+  Has3AZs: !Equals [!Ref NumberOfAZs, 3]
+
+Resources:
+  InternalALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${EnvironmentName}-internal-alb
+      Scheme: internal
+      Subnets: !If
+        - Has3AZs
+        - - !Ref PrivateAppSubnet1
+          - !Ref PrivateAppSubnet2
+          - !Ref PrivateAppSubnet3
+        - - !Ref PrivateAppSubnet1
+          - !Ref PrivateAppSubnet2
+      SecurityGroups:
+        - !Ref InternalALBSecurityGroupId
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: !Ref InternalALBDeletionProtection
+        - Key: idle_timeout.timeout_seconds
+          Value: !Ref InternalALBIdleTimeout
+        - Key: routing.http2.enabled
+          Value: !Ref InternalALBHTTP2Enabled
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: !Ref InternalALBDropInvalidHeaders
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-internal-alb
+
+  InternalALBListener80:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref InternalALB
+      Port: !Ref InternalALBListenerPort
+      Protocol: HTTP
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: text/plain
+            MessageBody: '404 - Not Found'
+            StatusCode: '404'
+
+Outputs:
+  InternalALBArn:
+    Description: ARN of the Internal ALB
+    Value: !Ref InternalALB
+    Export:
+      Name: !Sub ${EnvironmentName}-InternalALBArn
+  InternalALBDNSName:
+    Description: DNS Name of the Internal ALB
+    Value: !GetAtt InternalALB.DNSName
+    Export:
+      Name: !Sub ${EnvironmentName}-InternalALBDNSName
+  InternalALBListener80Arn:
+    Description: ARN of the Internal ALB HTTP Listener
+    Value: !Ref InternalALBListener80
+    Export:
+      Name: !Sub ${EnvironmentName}-InternalALBListener80Arn

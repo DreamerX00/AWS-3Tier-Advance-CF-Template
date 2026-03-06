@@ -1,0 +1,349 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: VPC, Internet Gateway, and Subnets (3 Public, 3 Private App, 3 Private Data)'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names (e.g. prod, staging, dev). Must be lowercase alphanumeric with hyphens.'
+    Type: String
+    Default: prod
+    AllowedPattern: '^[a-z][a-z0-9-]{1,20}$'
+    ConstraintDescription: 'Lowercase letters, numbers, hyphens only (2-21 chars).'
+
+  VpcCIDR:
+    Description: '[CRITICAL] IP range (CIDR notation) for this VPC. Ensure this does not overlap with other VPCs if you plan to use VPC Peering.'
+    Type: String
+    Default: 10.0.0.0/16
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: 'Must be a valid CIDR block (e.g. 10.0.0.0/16).'
+
+  EnableDnsSupport:
+    Description: '[OPTIONAL] Enable DNS resolution in the VPC. Required for ECS Service Discovery and SSM Session Manager.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnableDnsHostnames:
+    Description: '[OPTIONAL] Enable DNS hostnames in the VPC. Required for EC2 instances to get public DNS names and for many AWS services.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  PublicSubnet1CIDR:
+    Description: '[IMPORTANT] IP range (CIDR notation) for the public subnet in the first Availability Zone. Hosts the Public ALB and NAT Gateways.'
+    Type: String
+    Default: 10.0.1.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PublicSubnet2CIDR:
+    Description: '[IMPORTANT] IP range (CIDR notation) for the public subnet in the second Availability Zone. Hosts the Public ALB and NAT Gateways.'
+    Type: String
+    Default: 10.0.2.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PublicSubnet3CIDR:
+    Description: '[IMPORTANT] IP range (CIDR notation) for the public subnet in the third Availability Zone. Hosts the Public ALB and NAT Gateways.'
+    Type: String
+    Default: 10.0.3.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateAppSubnet1CIDR:
+    Description: '[IMPORTANT] IP range (CIDR notation) for the private application subnet in the first AZ. Hosts frontend and backend ECS tasks.'
+    Type: String
+    Default: 10.0.11.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateAppSubnet2CIDR:
+    Description: '[IMPORTANT] IP range (CIDR notation) for the private application subnet in the second AZ. Hosts frontend and backend ECS tasks.'
+    Type: String
+    Default: 10.0.12.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateAppSubnet3CIDR:
+    Description: '[IMPORTANT] IP range (CIDR notation) for the private application subnet in the third AZ. Hosts frontend and backend ECS tasks.'
+    Type: String
+    Default: 10.0.13.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateDataSubnet1CIDR:
+    Description: '[IMPORTANT] IP range (CIDR notation) for the private data subnet in the first AZ. Hosts RDS instances; isolate with no internet route.'
+    Type: String
+    Default: 10.0.21.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateDataSubnet2CIDR:
+    Description: '[IMPORTANT] IP range (CIDR notation) for the private data subnet in the second AZ. Hosts RDS instances; isolate with no internet route.'
+    Type: String
+    Default: 10.0.22.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateDataSubnet3CIDR:
+    Description: '[IMPORTANT] IP range (CIDR notation) for the private data subnet in the third AZ. Hosts RDS instances; isolate with no internet route.'
+    Type: String
+    Default: 10.0.23.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  NumberOfAZs:
+    Description: '[IMPORTANT] Number of Availability Zones to deploy across (2 or 3). Use 2 for regions with only 2 AZs or for cost savings in dev.'
+    Type: Number
+    Default: 3
+    AllowedValues: [2, 3]
+
+  VpcFlowLogRetentionDays:
+    Description: '[IMPORTANT] Number of days to retain VPC Flow Logs in CloudWatch. Increase for compliance-heavy environments (e.g. 90 or 365).'
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+
+  VpcFlowLogTrafficType:
+    Description: '[OPTIONAL] Type of traffic to capture in VPC Flow Logs. ALL captures accepted and rejected; REJECT-only is cheaper for security audits.'
+    Type: String
+    Default: ALL
+    AllowedValues: [ACCEPT, REJECT, ALL]
+
+Conditions:
+  Has3AZs: !Equals [!Ref NumberOfAZs, 3]
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: !Ref EnableDnsSupport
+      EnableDnsHostnames: !Ref EnableDnsHostnames
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-vpc
+
+  VPCFlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudWatchLogPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !GetAtt VPCFlowLogGroup.Arn
+                  - !Sub '${VPCFlowLogGroup.Arn}:*'
+
+  VPCFlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/vpc/${EnvironmentName}'
+      RetentionInDays: !Ref VpcFlowLogRetentionDays
+
+  VPCFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceType: VPC
+      ResourceId: !Ref VPC
+      TrafficType: !Ref VpcFlowLogTrafficType
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref VPCFlowLogGroup
+      DeliverLogsPermissionArn: !GetAtt VPCFlowLogRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-vpc-flow-log
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-igw
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-sn-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-sn-2
+
+  PublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Condition: Has3AZs
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet3CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-sn-3
+
+  PrivateAppSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PrivateAppSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-app-sn-1
+
+  PrivateAppSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PrivateAppSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-app-sn-2
+
+  PrivateAppSubnet3:
+    Type: AWS::EC2::Subnet
+    Condition: Has3AZs
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      CidrBlock: !Ref PrivateAppSubnet3CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-app-sn-3
+
+  PrivateDataSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PrivateDataSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-data-sn-1
+
+  PrivateDataSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PrivateDataSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-data-sn-2
+
+  PrivateDataSubnet3:
+    Type: AWS::EC2::Subnet
+    Condition: Has3AZs
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      CidrBlock: !Ref PrivateDataSubnet3CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-data-sn-3
+
+Outputs:
+  VpcId:
+    Description: A reference to the created VPC
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${EnvironmentName}-VpcId
+  VpcCIDR:
+    Description: The CIDR block of the VPC
+    Value: !Ref VpcCIDR
+    Export:
+      Name: !Sub ${EnvironmentName}-VpcCIDR
+  PublicSubnet1:
+    Description: A reference to the public subnet in the 1st AZ
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub ${EnvironmentName}-PublicSubnet1
+  PublicSubnet2:
+    Description: A reference to the public subnet in the 2nd AZ
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub ${EnvironmentName}-PublicSubnet2
+  PublicSubnet3:
+    Condition: Has3AZs
+    Description: A reference to the public subnet in the 3rd AZ
+    Value: !Ref PublicSubnet3
+    Export:
+      Name: !Sub ${EnvironmentName}-PublicSubnet3
+  PrivateAppSubnet1:
+    Description: A reference to the private app subnet in the 1st AZ
+    Value: !Ref PrivateAppSubnet1
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateAppSubnet1
+  PrivateAppSubnet2:
+    Description: A reference to the private app subnet in the 2nd AZ
+    Value: !Ref PrivateAppSubnet2
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateAppSubnet2
+  PrivateAppSubnet3:
+    Condition: Has3AZs
+    Description: A reference to the private app subnet in the 3rd AZ
+    Value: !Ref PrivateAppSubnet3
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateAppSubnet3
+  PrivateDataSubnet1:
+    Description: A reference to the private data subnet in the 1st AZ
+    Value: !Ref PrivateDataSubnet1
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateDataSubnet1
+  PrivateDataSubnet2:
+    Description: A reference to the private data subnet in the 2nd AZ
+    Value: !Ref PrivateDataSubnet2
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateDataSubnet2
+  PrivateDataSubnet3:
+    Condition: Has3AZs
+    Description: A reference to the private data subnet in the 3rd AZ
+    Value: !Ref PrivateDataSubnet3
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateDataSubnet3
+  NumberOfAZs:
+    Description: Number of AZs deployed
+    Value: !Ref NumberOfAZs
+    Export:
+      Name: !Sub ${EnvironmentName}-NumberOfAZs
+  InternetGateway:
+    Description: A reference to the internet gateway
+    Value: !Ref InternetGateway
+    Export:
+      Name: !Sub ${EnvironmentName}-InternetGateway

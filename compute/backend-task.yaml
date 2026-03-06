@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Backend ECS Task Definition'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  ECSTaskExecutionRoleArn:
+    Description: '[CRITICAL] ARN of the ECS Task Execution Role, which allows ECS to pull images from ECR and write logs to CloudWatch. Exported from the ecs-task-role stack.'
+    Type: String
+
+  ECSTaskRoleArn:
+    Description: '[CRITICAL] ARN of the ECS Task Role, which grants the running container permissions to call AWS services (S3, SQS, Secrets Manager, etc.). Exported from the ecs-task-role stack.'
+    Type: String
+
+  BackendRepositoryUri:
+    Description: '[CRITICAL] URI of the ECR repository containing the backend container image (without tag). Exported from the ECR stack.'
+    Type: String
+
+  BackendLogGroupName:
+    Description: '[CRITICAL] CloudWatch Log Group name for backend container logs. Exported from the cloudwatch stack.'
+    Type: String
+
+  DatabaseSecretArn:
+    Description: '[CRITICAL] ARN of the Secrets Manager secret containing database credentials. Exported from the secrets stack. Used to inject DB_USERNAME and DB_PASSWORD into the container.'
+    Type: String
+
+  RDSEndpointAddress:
+    Description: '[CRITICAL] Hostname of the RDS instance. Injected as the DB_HOST environment variable into the backend container. Exported from the RDS stack.'
+    Type: String
+
+  BackendImageTag:
+    Description: '[IMPORTANT] Docker image tag to deploy for the backend. Default is "latest" — use a specific semantic version (e.g. v1.2.3) in production for reproducible deployments.'
+    Type: String
+    Default: latest
+
+  DatabaseName:
+    Description: '[IMPORTANT] Name of the application database injected as DB_NAME into the backend container. Must match the database name used when the RDS instance was created.'
+    Type: String
+    Default: threetierdb
+
+  BackendCPU:
+    Description: '[IMPORTANT] CPU units allocated to the backend task (1 vCPU = 1024 units). Valid combinations are defined by Fargate: 256 CPU requires 512-2048 MB memory.'
+    Type: String
+    Default: '256'
+    AllowedValues: ['256', '512', '1024', '2048', '4096']
+
+  BackendMemory:
+    Description: '[IMPORTANT] Memory (MiB) allocated to the backend task. Must be a valid Fargate combination for the chosen CPU. Increase if containers are OOMKilled or performance is degraded.'
+    Type: String
+    Default: '512'
+    AllowedValues: ['512', '1024', '2048', '4096', '8192', '16384']
+
+  BackendContainerPort:
+    Description: '[IMPORTANT] Port the backend container listens on. Must match the port configured in your backend application and the security group BackendAppPort.'
+    Type: Number
+    Default: 8080
+    MinValue: 1
+    MaxValue: 65535
+
+  DatabasePort:
+    Description: '[IMPORTANT] Database port injected as DB_PORT environment variable. Must match the RDS DBPort setting.'
+    Type: Number
+    Default: 3306
+    MinValue: 1024
+    MaxValue: 65535
+
+  BackendNetworkMode:
+    Description: '[OPTIONAL] Docker networking mode for the backend task. awsvpc gives each task its own ENI and is required for Fargate.'
+    Type: String
+    Default: awsvpc
+    AllowedValues: [awsvpc, bridge, host, none]
+
+  BackendLogStreamPrefix:
+    Description: '[OPTIONAL] Log stream prefix for backend container logs in CloudWatch. Helps filter logs per service when multiple containers share a log group.'
+    Type: String
+    Default: backend
+
+Resources:
+  BackendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-backend-task
+      Cpu: !Ref BackendCPU
+      Memory: !Ref BackendMemory
+      NetworkMode: !Ref BackendNetworkMode
+      RequiresCompatibilities:
+        - EC2
+        - FARGATE
+      ExecutionRoleArn: !Ref ECSTaskExecutionRoleArn
+      TaskRoleArn: !Ref ECSTaskRoleArn
+      ContainerDefinitions:
+        - Name: backend
+          Image: !Sub ${BackendRepositoryUri}:${BackendImageTag}
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref BackendContainerPort
+              Protocol: tcp
+          Environment:
+            - Name: DB_HOST
+              Value: !Ref RDSEndpointAddress
+            - Name: DB_NAME
+              Value: !Ref DatabaseName
+            - Name: DB_PORT
+              Value: !Ref DatabasePort
+          Secrets:
+            - Name: DB_USERNAME
+              ValueFrom: !Sub '${DatabaseSecretArn}:username::'
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub '${DatabaseSecretArn}:password::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BackendLogGroupName
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: !Ref BackendLogStreamPrefix
+
+Outputs:
+  BackendTaskDefinitionArn:
+    Description: ARN of the Backend Task Definition
+    Value: !Ref BackendTaskDefinition
+    Export:
+      Name: !Sub ${EnvironmentName}-BackendTaskDefinitionArn

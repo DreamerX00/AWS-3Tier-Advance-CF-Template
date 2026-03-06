@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Target Groups for Load Balancers'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  VpcId:
+    Description: '[CRITICAL] ID of the VPC where target groups will be created. Exported from the VPC stack.'
+    Type: AWS::EC2::VPC::Id
+
+  FrontendTGPort:
+    Description: '[OPTIONAL] Port used by the frontend target group. Must match the FrontendContainerPort in frontend-task.yaml.'
+    Type: Number
+    Default: 80
+    MinValue: 1
+    MaxValue: 65535
+
+  BackendTGPort:
+    Description: '[IMPORTANT] Port used by the backend target group. Must match the BackendContainerPort in backend-task.yaml. Default is 8080.'
+    Type: Number
+    Default: 8080
+    MinValue: 1
+    MaxValue: 65535
+
+  FrontendHealthCheckPath:
+    Description: '[OPTIONAL] HTTP path the ALB will probe for frontend health checks. Must return 2xx. Change to a dedicated /health endpoint if available.'
+    Type: String
+    Default: '/'
+
+  BackendHealthCheckPath:
+    Description: '[IMPORTANT] HTTP path the ALB will probe for backend health checks. Must return 2xx. Use a lightweight dedicated endpoint (e.g. /api/health) that does not hit the database.'
+    Type: String
+    Default: '/api/health'
+
+  HealthCheckIntervalSeconds:
+    Description: '[OPTIONAL] Approximate interval in seconds between health checks. Shorter intervals detect failures faster but increase ALB request volume to your containers.'
+    Type: Number
+    Default: 30
+    MinValue: 5
+    MaxValue: 300
+
+  HealthCheckTimeoutSeconds:
+    Description: '[OPTIONAL] Seconds to wait for a health check response before it is considered failed. Must be less than HealthCheckIntervalSeconds.'
+    Type: Number
+    Default: 5
+    MinValue: 2
+    MaxValue: 120
+
+  HealthyThresholdCount:
+    Description: '[OPTIONAL] Consecutive successful health checks required before a target is considered healthy. Lower values register instances faster; higher values are more conservative.'
+    Type: Number
+    Default: 2
+    MinValue: 2
+    MaxValue: 10
+
+  UnhealthyThresholdCount:
+    Description: '[OPTIONAL] Consecutive failed health checks required before a target is deregistered. Lower values react faster to failures; higher values tolerate transient errors.'
+    Type: Number
+    Default: 3
+    MinValue: 2
+    MaxValue: 10
+
+  DeregistrationDelay:
+    Description: '[OPTIONAL] Seconds the load balancer waits before deregistering a target to allow in-flight requests to complete (connection draining). Reduce for faster rolling deployments.'
+    Type: Number
+    Default: 30
+    MinValue: 0
+    MaxValue: 3600
+
+  MatcherHttpCode:
+    Description: '[OPTIONAL] HTTP status codes for a successful health check response. Use "200" for strict checks or "200-299" if your health endpoint may return other 2xx codes.'
+    Type: String
+    Default: '200'
+
+  StickinessEnabled:
+    Description: '[OPTIONAL] Enable sticky sessions (session affinity) so a user always hits the same target. Required if your application stores session state in-process rather than in Redis/DB.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  StickinessDurationSeconds:
+    Description: '[OPTIONAL] Duration in seconds for sticky session cookies. 86400 = 1 day. Reduce for short-lived sessions. Only effective when StickinessEnabled is true.'
+    Type: Number
+    Default: 86400
+    MinValue: 1
+    MaxValue: 604800
+
+Resources:
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-frontend-tg
+      VpcId: !Ref VpcId
+      Port: !Ref FrontendTGPort
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: !Ref HealthCheckIntervalSeconds
+      HealthCheckPath: !Ref FrontendHealthCheckPath
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: !Ref HealthCheckTimeoutSeconds
+      HealthyThresholdCount: !Ref HealthyThresholdCount
+      UnhealthyThresholdCount: !Ref UnhealthyThresholdCount
+      Matcher:
+        HttpCode: !Ref MatcherHttpCode
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: !Ref DeregistrationDelay
+        - Key: stickiness.enabled
+          Value: !Ref StickinessEnabled
+        - Key: stickiness.type
+          Value: 'lb_cookie'
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: !Ref StickinessDurationSeconds
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-frontend-tg
+
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-backend-tg
+      VpcId: !Ref VpcId
+      Port: !Ref BackendTGPort
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: !Ref HealthCheckIntervalSeconds
+      HealthCheckPath: !Ref BackendHealthCheckPath
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: !Ref HealthCheckTimeoutSeconds
+      HealthyThresholdCount: !Ref HealthyThresholdCount
+      UnhealthyThresholdCount: !Ref UnhealthyThresholdCount
+      Matcher:
+        HttpCode: !Ref MatcherHttpCode
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: !Ref DeregistrationDelay
+        - Key: stickiness.enabled
+          Value: !Ref StickinessEnabled
+        - Key: stickiness.type
+          Value: 'lb_cookie'
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: !Ref StickinessDurationSeconds
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-backend-tg
+
+Outputs:
+  FrontendTargetGroupArn:
+    Description: ARN of the Frontend Target Group
+    Value: !Ref FrontendTargetGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-FrontendTargetGroupArn
+  BackendTargetGroupArn:
+    Description: ARN of the Backend Target Group
+    Value: !Ref BackendTargetGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-BackendTargetGroupArn

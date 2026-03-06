@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: ECS Instance Role and Profile'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+Resources:
+  ECSInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-ecs-instance-role
+
+  ECSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref ECSInstanceRole
+
+Outputs:
+  ECSInstanceProfileArn:
+    Description: ARN of the ECS Instance Profile
+    Value: !GetAtt ECSInstanceProfile.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-ECSInstanceProfileArn
+  ECSInstanceProfileName:
+    Description: Name of the ECS Instance Profile
+    Value: !Ref ECSInstanceProfile
+    Export:
+      Name: !Sub ${EnvironmentName}-ECSInstanceProfileName

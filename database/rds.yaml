@@ -1,0 +1,231 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Relational Database Service (RDS) instance'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  DBInstanceClass:
+    Description: '[IMPORTANT] RDS instance class. db.t3.micro is suitable for dev/test only. Use db.t3.medium or larger for production workloads that require consistent performance.'
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.t3.large
+      - db.t3.xlarge
+      - db.m5.large
+      - db.m5.xlarge
+      - db.m5.2xlarge
+      - db.r5.large
+      - db.r5.xlarge
+      - db.r5.2xlarge
+
+  DBAllocatedStorage:
+    Description: '[IMPORTANT] Initial allocated storage size in GiB. Must be within the valid range for the chosen StorageType (gp3: 20-65536 GiB). RDS can autoscale up to MaxAllocatedStorage.'
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 65536
+
+  MaxAllocatedStorage:
+    Description: '[IMPORTANT] Maximum storage in GiB that RDS Storage Autoscaling can grow to. Set to 0 to disable autoscaling. Must be >= DBAllocatedStorage.'
+    Type: Number
+    Default: 100
+    MinValue: 20
+    MaxValue: 65536
+
+  DBEngine:
+    Description: '[IMPORTANT] Database engine to use. mysql is the default. Change to postgres for PostgreSQL or mariadb for MariaDB. Changing this after deployment forces a replacement.'
+    Type: String
+    Default: mysql
+    AllowedValues: [mysql, postgres, mariadb]
+
+  DBEngineVersion:
+    Description: '[IMPORTANT] Version of the database engine. For MySQL use 8.0; for PostgreSQL use 15.4; for MariaDB use 10.11. Must be a version supported by AWS for the chosen engine.'
+    Type: String
+    Default: '8.0'
+
+  DatabaseSecurityGroupId:
+    Description: '[CRITICAL] Security Group ID that allows only backend tasks to connect on the database port. Exported from the security-groups stack.'
+    Type: AWS::EC2::SecurityGroup::Id
+
+  DBSubnetGroupName:
+    Description: '[CRITICAL] Name of the RDS subnet group. Exported from the db-subnet-group stack.'
+    Type: String
+
+  DatabaseName:
+    Description: '[IMPORTANT] Name of the initial database created on the RDS instance. Must start with a letter and contain only alphanumeric characters or underscores.'
+    Type: String
+    Default: threetierdb
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+    ConstraintDescription: 'Must start with a letter; only alphanumeric and underscores allowed.'
+
+  DBPort:
+    Description: '[IMPORTANT] Port number for database connections. Default is 3306 (MySQL). Change to 5432 for PostgreSQL. Must match the DatabasePort in security-groups.yaml.'
+    Type: Number
+    Default: 3306
+    MinValue: 1024
+    MaxValue: 65535
+
+  StorageType:
+    Description: '[OPTIONAL] RDS storage type. gp3 is the recommended default offering better performance than gp2 at lower cost. Use io1/io2 for very high IOPS requirements.'
+    Type: String
+    Default: gp3
+    AllowedValues: [gp2, gp3, io1, io2]
+
+  StorageEncrypted:
+    Description: '[IMPORTANT] Enable encryption at rest for the RDS instance using AWS-managed KMS keys. Strongly recommended for all environments. Cannot be changed after creation.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  MultiAZ:
+    Description: '[CRITICAL] Enable Multi-AZ deployment for high availability. Creates a synchronous standby replica in a different AZ. Set to false for dev/test to reduce costs — NEVER disable in production.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  BackupRetentionPeriod:
+    Description: '[IMPORTANT] Number of days to retain automated backups. 0 disables automated backups. Set to 7 minimum for production; increase to 30+ for compliance requirements.'
+    Type: Number
+    Default: 7
+    MinValue: 0
+    MaxValue: 35
+
+  DeletionProtection:
+    Description: '[CRITICAL] Enable deletion protection on the RDS instance. When true, the database cannot be deleted through the console or API (a separate update is required first). Always keep true in production.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  CopyTagsToSnapshot:
+    Description: '[OPTIONAL] Copy all instance tags to automated and manual snapshots. Recommended for consistent cost allocation tagging and snapshot management.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnablePerformanceInsights:
+    Description: '[OPTIONAL] Enable Performance Insights for advanced database performance monitoring. Incurs additional cost but is highly useful for diagnosing slow queries in production.'
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
+  PerformanceInsightsRetentionPeriod:
+    Description: '[OPTIONAL] Number of days to retain Performance Insights data. 7 days is free; 731 days requires a paid tier. Only relevant when EnablePerformanceInsights is true.'
+    Type: Number
+    Default: 7
+    AllowedValues: [7, 731]
+
+  MonitoringInterval:
+    Description: '[OPTIONAL] Interval in seconds for Enhanced Monitoring metrics sent to CloudWatch. 0 disables Enhanced Monitoring. Use 60 for production to get OS-level metrics.'
+    Type: Number
+    Default: 0
+    AllowedValues: [0, 1, 5, 10, 15, 30, 60]
+
+  PreferredMaintenanceWindow:
+    Description: '[OPTIONAL] Weekly time range during which system maintenance can occur (UTC). Format: ddd:hh24:mi-ddd:hh24:mi. Choose a low-traffic window for your region.'
+    Type: String
+    Default: 'Sun:03:00-Sun:04:00'
+
+  PreferredBackupWindow:
+    Description: '[OPTIONAL] Daily time range during which automated backups are created (UTC). Must not overlap with PreferredMaintenanceWindow. Format: hh24:mi-hh24:mi.'
+    Type: String
+    Default: '01:00-02:00'
+
+  AutoMinorVersionUpgrade:
+    Description: '[OPTIONAL] Automatically apply minor engine version upgrades during the maintenance window. Recommended true for security patches. Set false only if application requires a fixed engine version.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+Conditions:
+  EnableEnhancedMonitoring: !Not [!Equals [!Ref MonitoringInterval, 0]]
+  IsMySQL: !Equals [!Ref DBEngine, 'mysql']
+  IsMariaDB: !Equals [!Ref DBEngine, 'mariadb']
+  IsMySQLOrMariaDB: !Or
+    - !Condition IsMySQL
+    - !Condition IsMariaDB
+
+Resources:
+  RDSEnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Condition: EnableEnhancedMonitoring
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-rds-monitoring-role
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Engine: !Ref DBEngine
+      EngineVersion: !Ref DBEngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      DBName: !Ref DatabaseName
+      Port: !Ref DBPort
+      AllocatedStorage: !Ref DBAllocatedStorage
+      MaxAllocatedStorage: !Ref MaxAllocatedStorage
+      StorageType: !Ref StorageType
+      StorageEncrypted: !Ref StorageEncrypted
+      MasterUsername: !Sub '{{resolve:secretsmanager:${EnvironmentName}-database-credentials:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${EnvironmentName}-database-credentials:SecretString:password}}'
+      DBSubnetGroupName: !Ref DBSubnetGroupName
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroupId
+      PubliclyAccessible: false
+      MultiAZ: !Ref MultiAZ
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      DeletionProtection: !Ref DeletionProtection
+      CopyTagsToSnapshot: !Ref CopyTagsToSnapshot
+      EnableCloudwatchLogsExports: !If
+        - IsMySQLOrMariaDB
+        - - error
+          - general
+          - slowquery
+        - - postgresql
+          - upgrade
+      EnablePerformanceInsights: !Ref EnablePerformanceInsights
+      PerformanceInsightsRetentionPeriod: !Ref PerformanceInsightsRetentionPeriod
+      MonitoringInterval: !Ref MonitoringInterval
+      MonitoringRoleArn: !If
+        - EnableEnhancedMonitoring
+        - !GetAtt RDSEnhancedMonitoringRole.Arn
+        - !Ref AWS::NoValue
+      PreferredMaintenanceWindow: !Ref PreferredMaintenanceWindow
+      PreferredBackupWindow: !Ref PreferredBackupWindow
+      AutoMinorVersionUpgrade: !Ref AutoMinorVersionUpgrade
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-rds
+
+Outputs:
+  RDSEndpointAddress:
+    Description: RDS Endpoint Address
+    Value: !GetAtt RDSInstance.Endpoint.Address
+    Export:
+      Name: !Sub ${EnvironmentName}-RDSEndpointAddress
+  RDSEndpointPort:
+    Description: RDS Endpoint Port
+    Value: !GetAtt RDSInstance.Endpoint.Port
+    Export:
+      Name: !Sub ${EnvironmentName}-RDSEndpointPort
+  RDSInstanceId:
+    Description: RDS Instance Identifier
+    Value: !Ref RDSInstance
+    Export:
+      Name: !Sub ${EnvironmentName}-RDSInstanceId

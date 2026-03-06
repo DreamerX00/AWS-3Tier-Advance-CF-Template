@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Frontend ECS Service'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  ECSClusterName:
+    Description: '[CRITICAL] Name of the ECS cluster in which this service runs. Exported from the ecs-cluster stack.'
+    Type: String
+
+  FrontendTaskDefinitionArn:
+    Description: '[CRITICAL] ARN of the frontend ECS Task Definition. Exported from the frontend-task stack.'
+    Type: String
+
+  FrontendTargetGroupArn:
+    Description: '[CRITICAL] ARN of the frontend ALB Target Group. Exported from the target-groups stack.'
+    Type: String
+
+  PrivateAppSubnet1:
+    Description: '[CRITICAL] First private application subnet for ECS networking. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+
+  PrivateAppSubnet2:
+    Description: '[CRITICAL] Second private application subnet for ECS networking. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+
+  PrivateAppSubnet3:
+    Description: '[CRITICAL] Third private application subnet for ECS networking. Only used when NumberOfAZs is 3.'
+    Type: String
+    Default: ''
+
+  NumberOfAZs:
+    Description: '[IMPORTANT] Number of AZs deployed. Must match the VPC stack setting.'
+    Type: Number
+    Default: 3
+    AllowedValues: [2, 3]
+
+  FrontendSecurityGroupId:
+    Description: '[CRITICAL] Security Group ID for the frontend ECS tasks. Exported from the security-groups stack.'
+    Type: AWS::EC2::SecurityGroup::Id
+
+  PublicALBListener80Arn:
+    Description: '[CRITICAL] ARN of the Public ALB HTTP listener. Used to create the listener rule. Exported from the public-alb stack.'
+    Type: String
+
+  FrontendDesiredCount:
+    Description: '[IMPORTANT] Desired number of frontend ECS task replicas. For production, set to at least 2 for availability across AZs. Application Auto Scaling will adjust this dynamically.'
+    Type: Number
+    Default: 2
+    MinValue: 0
+    MaxValue: 100
+
+  FrontendMaximumPercent:
+    Description: '[OPTIONAL] Maximum percentage of tasks that can be running during a rolling deployment (relative to DesiredCount). 200 means twice the desired count can run simultaneously for zero-downtime deploys.'
+    Type: Number
+    Default: 200
+    MinValue: 100
+    MaxValue: 200
+
+  FrontendMinimumHealthyPercent:
+    Description: '[OPTIONAL] Minimum percentage of healthy tasks required during a rolling deployment. 100 ensures no tasks are stopped before replacements are healthy.'
+    Type: Number
+    Default: 100
+    MinValue: 0
+    MaxValue: 100
+
+  FrontendHealthCheckGracePeriod:
+    Description: '[OPTIONAL] Seconds after a task starts before the load balancer begins health checks. Increase if the frontend application takes longer to start.'
+    Type: Number
+    Default: 60
+    MinValue: 0
+    MaxValue: 7200
+
+  FrontendScaleMinCapacity:
+    Description: '[IMPORTANT] Minimum number of frontend tasks that Application Auto Scaling will maintain. Should not be less than FrontendDesiredCount for production.'
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 100
+
+  FrontendScaleMaxCapacity:
+    Description: '[IMPORTANT] Maximum number of frontend tasks that Application Auto Scaling can scale out to. Set based on peak load and cost ceilings.'
+    Type: Number
+    Default: 6
+    MinValue: 1
+    MaxValue: 100
+
+  FrontendScaleCpuTarget:
+    Description: '[OPTIONAL] Target average CPU utilisation (%) for the frontend service Auto Scaling policy. Scale-out triggers when CPU exceeds this; scale-in when below.'
+    Type: Number
+    Default: 70
+    MinValue: 10
+    MaxValue: 90
+
+  FrontendScaleInCooldown:
+    Description: '[OPTIONAL] Seconds to wait after a scale-in event before allowing another scale-in. Prevents rapid thrashing. 300 seconds (5 minutes) is a safe default.'
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 3600
+
+  FrontendScaleOutCooldown:
+    Description: '[OPTIONAL] Seconds to wait after a scale-out event before allowing another scale-out. Keep low (60s) so the service reacts quickly to traffic spikes.'
+    Type: Number
+    Default: 60
+    MinValue: 0
+    MaxValue: 3600
+
+  FrontendListenerRulePriority:
+    Description: '[OPTIONAL] Priority of the ALB listener rule. Lower numbers are evaluated first. Change only if other rules are added to the same listener.'
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 50000
+
+  FrontendContainerPort:
+    Description: '[IMPORTANT] Port the frontend container listens on. Must match the ContainerPort in frontend-task.yaml. Used to register with the target group.'
+    Type: Number
+    Default: 80
+    MinValue: 1
+    MaxValue: 65535
+
+  FrontendLaunchType:
+    Description: '[IMPORTANT] ECS launch type for frontend service. FARGATE is serverless (no EC2 management). EC2 uses your ASG capacity provider.'
+    Type: String
+    Default: FARGATE
+    AllowedValues: [FARGATE, EC2]
+
+  FrontendEnableExecuteCommand:
+    Description: '[OPTIONAL] Enable ECS Exec for debugging (shell access to containers). Disable in production for security.'
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
+  FrontendPathPattern:
+    Description: '[OPTIONAL] Path pattern for the ALB listener rule that routes traffic to this service. /* catches all paths.'
+    Type: String
+    Default: '/*'
+
+Conditions:
+  IsFargateFrontend: !Equals [!Ref FrontendLaunchType, 'FARGATE']
+  Has3AZs: !Equals [!Ref NumberOfAZs, 3]
+
+Resources:
+  FrontendService:
+    Type: AWS::ECS::Service
+    DependsOn: FrontendListenerRule
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-frontend-svc
+      Cluster: !Ref ECSClusterName
+      TaskDefinition: !Ref FrontendTaskDefinitionArn
+      DesiredCount: !Ref FrontendDesiredCount
+      LaunchType: !Ref FrontendLaunchType
+      DeploymentConfiguration:
+        MaximumPercent: !Ref FrontendMaximumPercent
+        MinimumHealthyPercent: !Ref FrontendMinimumHealthyPercent
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: !If [IsFargateFrontend, DISABLED, !Ref 'AWS::NoValue']
+          Subnets: !If
+            - Has3AZs
+            - - !Ref PrivateAppSubnet1
+              - !Ref PrivateAppSubnet2
+              - !Ref PrivateAppSubnet3
+            - - !Ref PrivateAppSubnet1
+              - !Ref PrivateAppSubnet2
+          SecurityGroups:
+            - !Ref FrontendSecurityGroupId
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: !Ref FrontendContainerPort
+          TargetGroupArn: !Ref FrontendTargetGroupArn
+      HealthCheckGracePeriodSeconds: !Ref FrontendHealthCheckGracePeriod
+      EnableExecuteCommand: !Ref FrontendEnableExecuteCommand
+
+  FrontendListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref PublicALBListener80Arn
+      Priority: !Ref FrontendListenerRulePriority
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - !Ref FrontendPathPattern
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroupArn
+
+  FrontendAutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref FrontendScaleMaxCapacity
+      MinCapacity: !Ref FrontendScaleMinCapacity
+      ResourceId: !Sub 'service/${ECSClusterName}/${FrontendService.Name}'
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  FrontendScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-frontend-scaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref FrontendAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: !Ref FrontendScaleCpuTarget
+        ScaleInCooldown: !Ref FrontendScaleInCooldown
+        ScaleOutCooldown: !Ref FrontendScaleOutCooldown
+
+Outputs:
+  FrontendServiceName:
+    Description: Name of the Frontend ECS Service
+    Value: !GetAtt FrontendService.Name
+    Export:
+      Name: !Sub ${EnvironmentName}-FrontendServiceName

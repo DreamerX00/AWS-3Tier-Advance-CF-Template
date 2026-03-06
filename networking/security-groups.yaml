@@ -1,0 +1,210 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Foundational Security Groups'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used in vpc.yaml.'
+    Type: String
+    Default: prod
+
+  VpcId:
+    Description: '[CRITICAL] ID of the VPC where all security groups will be created. Exported from the VPC stack.'
+    Type: AWS::EC2::VPC::Id
+
+  HttpPort:
+    Description: '[OPTIONAL] Standard HTTP port used by the Public ALB listener and frontend ingress rules.'
+    Type: Number
+    Default: 80
+    MinValue: 1
+    MaxValue: 65535
+
+  HttpsPort:
+    Description: '[OPTIONAL] Standard HTTPS port for inbound internet traffic and outbound AWS API calls via NAT.'
+    Type: Number
+    Default: 443
+    MinValue: 1
+    MaxValue: 65535
+
+  FrontendAppPort:
+    Description: '[IMPORTANT] Port on which the frontend container application listens. Must match ContainerPort in frontend-task.yaml.'
+    Type: Number
+    Default: 3000
+    MinValue: 1
+    MaxValue: 65535
+
+  BackendAppPort:
+    Description: '[IMPORTANT] Port on which the backend container application listens. Must match ContainerPort in backend-task.yaml.'
+    Type: Number
+    Default: 8080
+    MinValue: 1
+    MaxValue: 65535
+
+  DatabasePort:
+    Description: '[IMPORTANT] Port for database connections. Default is MySQL 3306. Change to 5432 for PostgreSQL, or 1433 for MSSQL.'
+    Type: Number
+    Default: 3306
+    MinValue: 1024
+    MaxValue: 65535
+
+  AllowedIngressCIDR:
+    Description: '[IMPORTANT] CIDR block allowed to reach the Public ALB on HTTP/HTTPS. Default 0.0.0.0/0 is open to the internet — restrict to your office/CDN IP ranges for non-public environments.'
+    Type: String
+    Default: '0.0.0.0/0'
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: 'Must be a valid CIDR block.'
+
+Resources:
+  PublicALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for public Application Load Balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref HttpPort
+          ToPort: !Ref HttpPort
+          CidrIp: !Ref AllowedIngressCIDR
+          Description: !Sub 'HTTP (port ${HttpPort}) from ${AllowedIngressCIDR}'
+        - IpProtocol: tcp
+          FromPort: !Ref HttpsPort
+          ToPort: !Ref HttpsPort
+          CidrIp: !Ref AllowedIngressCIDR
+          Description: !Sub 'HTTPS (port ${HttpsPort}) from ${AllowedIngressCIDR}'
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: 'Allow all outbound'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-alb-sg
+
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for frontend ECS tasks/EC2 instances
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref HttpPort
+          ToPort: !Ref HttpPort
+          SourceSecurityGroupId: !Ref PublicALBSecurityGroup
+          Description: !Sub 'HTTP (port ${HttpPort}) from Public ALB'
+        - IpProtocol: tcp
+          FromPort: !Ref FrontendAppPort
+          ToPort: !Ref FrontendAppPort
+          SourceSecurityGroupId: !Ref PublicALBSecurityGroup
+          Description: !Sub 'Frontend app (port ${FrontendAppPort}) from Public ALB'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: !Ref HttpPort
+          ToPort: !Ref HttpPort
+          CidrIp: 0.0.0.0/0
+          Description: 'HTTP egress'
+        - IpProtocol: tcp
+          FromPort: !Ref HttpsPort
+          ToPort: !Ref HttpsPort
+          CidrIp: 0.0.0.0/0
+          Description: 'HTTPS for AWS API dependencies via NAT'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-frontend-sg
+
+  InternalALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for internal Application Load Balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref HttpPort
+          ToPort: !Ref HttpPort
+          SourceSecurityGroupId: !Ref FrontendSecurityGroup
+          Description: !Sub 'HTTP (port ${HttpPort}) from Frontend'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: !Ref HttpPort
+          ToPort: !Ref HttpPort
+          CidrIp: 0.0.0.0/0
+          Description: 'HTTP egress'
+        - IpProtocol: tcp
+          FromPort: !Ref BackendAppPort
+          ToPort: !Ref BackendAppPort
+          CidrIp: 0.0.0.0/0
+          Description: !Sub 'App traffic egress (port ${BackendAppPort})'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-internal-alb-sg
+
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for backend ECS tasks/EC2 instances
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref HttpPort
+          ToPort: !Ref HttpPort
+          SourceSecurityGroupId: !Ref InternalALBSecurityGroup
+          Description: !Sub 'HTTP (port ${HttpPort}) from Internal ALB'
+        - IpProtocol: tcp
+          FromPort: !Ref BackendAppPort
+          ToPort: !Ref BackendAppPort
+          SourceSecurityGroupId: !Ref InternalALBSecurityGroup
+          Description: !Sub 'Backend app (port ${BackendAppPort}) from Internal ALB'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: !Ref DatabasePort
+          ToPort: !Ref DatabasePort
+          CidrIp: 0.0.0.0/0
+          Description: !Sub 'Database egress (port ${DatabasePort})'
+        - IpProtocol: tcp
+          FromPort: !Ref HttpsPort
+          ToPort: !Ref HttpsPort
+          CidrIp: 0.0.0.0/0
+          Description: 'HTTPS for AWS API dependencies via NAT'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-backend-sg
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for database instances
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref DatabasePort
+          ToPort: !Ref DatabasePort
+          SourceSecurityGroupId: !Ref BackendSecurityGroup
+          Description: !Sub 'DB (port ${DatabasePort}) from Backend only'
+      SecurityGroupEgress: []
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-database-sg
+
+Outputs:
+  PublicALBSecurityGroupId:
+    Description: Security Group ID for the Public ALB
+    Value: !Ref PublicALBSecurityGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-PublicALBSecurityGroupId
+  FrontendSecurityGroupId:
+    Description: Security Group ID for Frontend App
+    Value: !Ref FrontendSecurityGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-FrontendSecurityGroupId
+  InternalALBSecurityGroupId:
+    Description: Security Group ID for Internal ALB
+    Value: !Ref InternalALBSecurityGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-InternalALBSecurityGroupId
+  BackendSecurityGroupId:
+    Description: Security Group ID for Backend App
+    Value: !Ref BackendSecurityGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-BackendSecurityGroupId
+  DatabaseSecurityGroupId:
+    Description: Security Group ID for Database
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-DatabaseSecurityGroupId

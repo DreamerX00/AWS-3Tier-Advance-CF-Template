@@ -1,0 +1,122 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Elastic Container Registry (ECR) for Frontend and Backend Images'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  ImageTagMutability:
+    Description: '[IMPORTANT] Controls whether image tags in ECR can be overwritten. IMMUTABLE prevents overwriting existing tags — strongly recommended for production to ensure reproducible deployments. MUTABLE allows re-tagging (useful for "latest" in dev).'
+    Type: String
+    Default: IMMUTABLE
+    AllowedValues: [IMMUTABLE, MUTABLE]
+
+  ScanOnPush:
+    Description: '[IMPORTANT] Automatically scan container images for known CVEs when pushed to ECR. Uses ECR Basic Scanning (OS vulnerabilities). Enable Enhanced Scanning separately for deeper analysis.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  ECREncryptionType:
+    Description: '[OPTIONAL] Encryption type for ECR repository. AES256 uses AWS-managed keys. KMS uses a Customer Managed Key for stricter access control and audit logs in CloudTrail.'
+    Type: String
+    Default: AES256
+    AllowedValues: [AES256, KMS]
+
+  MaxImageCount:
+    Description: '[OPTIONAL] Maximum number of images to retain per ECR repository. Older images are automatically expired when this count is exceeded. Reduce for smaller repositories with fast iteration cycles.'
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 1000
+
+Resources:
+  FrontendRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub ${EnvironmentName}-frontend
+      ImageTagMutability: !Ref ImageTagMutability
+      ImageScanningConfiguration:
+        ScanOnPush: !Ref ScanOnPush
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last ${MaxImageCount} images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": ${MaxImageCount}
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      EncryptionConfiguration:
+        EncryptionType: !Ref ECREncryptionType
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-frontend-ecr
+
+  BackendRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub ${EnvironmentName}-backend
+      ImageTagMutability: !Ref ImageTagMutability
+      ImageScanningConfiguration:
+        ScanOnPush: !Ref ScanOnPush
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last ${MaxImageCount} images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": ${MaxImageCount}
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      EncryptionConfiguration:
+        EncryptionType: !Ref ECREncryptionType
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-backend-ecr
+
+Outputs:
+  FrontendRepositoryUri:
+    Description: URI of the Frontend ECR Repository
+    Value: !GetAtt FrontendRepository.RepositoryUri
+    Export:
+      Name: !Sub ${EnvironmentName}-FrontendRepositoryUri
+  BackendRepositoryUri:
+    Description: URI of the Backend ECR Repository
+    Value: !GetAtt BackendRepository.RepositoryUri
+    Export:
+      Name: !Sub ${EnvironmentName}-BackendRepositoryUri
+  FrontendRepositoryName:
+    Description: Name of the Frontend ECR Repository
+    Value: !Ref FrontendRepository
+    Export:
+      Name: !Sub ${EnvironmentName}-FrontendRepositoryName
+  BackendRepositoryName:
+    Description: Name of the Backend ECR Repository
+    Value: !Ref BackendRepository
+    Export:
+      Name: !Sub ${EnvironmentName}-BackendRepositoryName

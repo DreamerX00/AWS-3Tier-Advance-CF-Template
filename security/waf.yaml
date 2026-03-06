@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: WAF Web ACL for Public ALB Protection'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  WAFScope:
+    Description: '[IMPORTANT] Scope of the WAF Web ACL. REGIONAL associates with ALB/API Gateway in the same region. Use CLOUDFRONT only if attaching to a CloudFront distribution (must be deployed in us-east-1).'
+    Type: String
+    Default: REGIONAL
+    AllowedValues: [REGIONAL, CLOUDFRONT]
+
+  RateLimitThreshold:
+    Description: '[CRITICAL] Maximum number of requests from a single IP in a 5-minute window before blocking. 2000 is a conservative default. Tune this based on your expected legitimate traffic volumes — too low causes false positives.'
+    Type: Number
+    Default: 2000
+    MinValue: 100
+    MaxValue: 20000000
+
+  EnableCommonRuleSet:
+    Description: '[IMPORTANT] Enable the AWS Managed Common Rule Set (CRS) which protects against OWASP Top 10 vulnerabilities including XSS and path traversal. Disable only if a managed rule causes false positives with your application.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnableKnownBadInputsRuleSet:
+    Description: '[IMPORTANT] Enable the AWS Managed Known Bad Inputs Rule Set to block requests containing patterns known to be malicious (e.g. Log4JRCE exploits). Recommended for all production environments.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnableSQLiRuleSet:
+    Description: '[IMPORTANT] Enable the AWS Managed SQL Injection Rule Set. Blocks requests containing SQL injection patterns attempting to manipulate your database. Leave enabled unless your application performs legitimate SQL-like operations in URLs.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnableSampledRequests:
+    Description: '[OPTIONAL] Enable WAF to sample requests for visibility into what is being blocked/allowed. Required for CloudWatch metrics to include request data. Disable only for extreme cost optimisation.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+Conditions:
+  EnableCRS: !Equals [!Ref EnableCommonRuleSet, 'true']
+  EnableKBI: !Equals [!Ref EnableKnownBadInputsRuleSet, 'true']
+  EnableSQLi: !Equals [!Ref EnableSQLiRuleSet, 'true']
+
+Resources:
+  WAFWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub ${EnvironmentName}-waf-acl
+      Scope: !Ref WAFScope
+      DefaultAction:
+        Allow: {}
+      Rules:
+        - Name: RateLimitRule
+          Priority: 1
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref RateLimitThreshold
+              AggregateKeyType: IP
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: !Ref EnableSampledRequests
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRule
+        - !If
+          - EnableCRS
+          - Name: AWSManagedRulesCommonRuleSet
+            Priority: 2
+            OverrideAction:
+              None: {}
+            Statement:
+              ManagedRuleGroupStatement:
+                VendorName: AWS
+                Name: AWSManagedRulesCommonRuleSet
+            VisibilityConfig:
+              SampledRequestsEnabled: !Ref EnableSampledRequests
+              CloudWatchMetricsEnabled: true
+              MetricName: AWSManagedRulesCommonRuleSet
+          - !Ref AWS::NoValue
+        - !If
+          - EnableKBI
+          - Name: AWSManagedRulesKnownBadInputsRuleSet
+            Priority: 3
+            OverrideAction:
+              None: {}
+            Statement:
+              ManagedRuleGroupStatement:
+                VendorName: AWS
+                Name: AWSManagedRulesKnownBadInputsRuleSet
+            VisibilityConfig:
+              SampledRequestsEnabled: !Ref EnableSampledRequests
+              CloudWatchMetricsEnabled: true
+              MetricName: AWSManagedRulesKnownBadInputsRuleSet
+          - !Ref AWS::NoValue
+        - !If
+          - EnableSQLi
+          - Name: AWSManagedRulesSQLiRuleSet
+            Priority: 4
+            OverrideAction:
+              None: {}
+            Statement:
+              ManagedRuleGroupStatement:
+                VendorName: AWS
+                Name: AWSManagedRulesSQLiRuleSet
+            VisibilityConfig:
+              SampledRequestsEnabled: !Ref EnableSampledRequests
+              CloudWatchMetricsEnabled: true
+              MetricName: AWSManagedRulesSQLiRuleSet
+          - !Ref AWS::NoValue
+      VisibilityConfig:
+        SampledRequestsEnabled: !Ref EnableSampledRequests
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub ${EnvironmentName}-waf-acl
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-waf-acl
+
+Outputs:
+  WAFWebACLArn:
+    Description: ARN of the WAF Web ACL
+    Value: !GetAtt WAFWebACL.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-WAFWebACLArn
+  WAFWebACLId:
+    Description: ID of the WAF Web ACL
+    Value: !GetAtt WAFWebACL.Id
+    Export:
+      Name: !Sub ${EnvironmentName}-WAFWebACLId

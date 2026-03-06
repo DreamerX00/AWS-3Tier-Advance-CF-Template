@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: NAT Gateways for outbound internet access from private subnets'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+  NumberOfAZs:
+    Description: '[IMPORTANT] Number of AZs to deploy NAT Gateways across.'
+    Type: Number
+    Default: 3
+    AllowedValues: [2, 3]
+  PublicSubnet1:
+    Description: '[CRITICAL] First public subnet ID where NAT Gateway 1 will be placed. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+  PublicSubnet2:
+    Description: '[CRITICAL] Second public subnet ID where NAT Gateway 2 will be placed. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+  PublicSubnet3:
+    Description: '[CRITICAL] Third public subnet ID where NAT Gateway 3 will be placed. Only used when NumberOfAZs is 3.'
+    Type: String
+    Default: ''
+
+Conditions:
+  Has3AZs: !Equals [!Ref NumberOfAZs, 3]
+
+Resources:
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-eip-1
+
+  NatGateway2EIP:
+    Type: AWS::EC2::EIP
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-eip-2
+
+  NatGateway3EIP:
+    Type: AWS::EC2::EIP
+    Condition: Has3AZs
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-eip-3
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-1
+
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId
+      SubnetId: !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-2
+
+  NatGateway3:
+    Type: AWS::EC2::NatGateway
+    Condition: Has3AZs
+    Properties:
+      AllocationId: !GetAtt NatGateway3EIP.AllocationId
+      SubnetId: !Ref PublicSubnet3
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-3
+
+Outputs:
+  NatGateway1:
+    Description: First NAT Gateway
+    Value: !Ref NatGateway1
+    Export:
+      Name: !Sub ${EnvironmentName}-NatGateway1
+  NatGateway2:
+    Description: Second NAT Gateway
+    Value: !Ref NatGateway2
+    Export:
+      Name: !Sub ${EnvironmentName}-NatGateway2
+  NatGateway3:
+    Condition: Has3AZs
+    Description: Third NAT Gateway
+    Value: !Ref NatGateway3
+    Export:
+      Name: !Sub ${EnvironmentName}-NatGateway3

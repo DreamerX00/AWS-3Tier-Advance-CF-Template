@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Database Subnet Group'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+  NumberOfAZs:
+    Description: '[IMPORTANT] Number of AZs deployed. Must match the VPC stack setting.'
+    Type: Number
+    Default: 3
+    AllowedValues: [2, 3]
+  PrivateDataSubnet1:
+    Description: '[CRITICAL] First private data subnet for the DB subnet group. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+  PrivateDataSubnet2:
+    Description: '[CRITICAL] Second private data subnet for the DB subnet group. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+  PrivateDataSubnet3:
+    Description: '[CRITICAL] Third private data subnet for the DB subnet group. Only used when NumberOfAZs is 3.'
+    Type: String
+    Default: ''
+
+Conditions:
+  Has3AZs: !Equals [!Ref NumberOfAZs, 3]
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for the Three-Tier Database
+      SubnetIds: !If
+        - Has3AZs
+        - - !Ref PrivateDataSubnet1
+          - !Ref PrivateDataSubnet2
+          - !Ref PrivateDataSubnet3
+        - - !Ref PrivateDataSubnet1
+          - !Ref PrivateDataSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-db-subnet-group
+
+Outputs:
+  DBSubnetGroupName:
+    Description: Name of the DB Subnet Group
+    Value: !Ref DBSubnetGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-DBSubnetGroupName

@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Launch Template for ECS Container Instances'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  InstanceType:
+    Description: '[IMPORTANT] EC2 instance type for ECS container instances. t3.micro is fine for dev/test. Use t3.medium or larger for production workloads. Must be in the c5, m5, t3, or r5 families for ECS optimized AMIs.'
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - t3.2xlarge
+      - m5.large
+      - m5.xlarge
+      - m5.2xlarge
+      - c5.large
+      - c5.xlarge
+      - c5.2xlarge
+      - r5.large
+      - r5.xlarge
+
+  ECSInstanceProfileArn:
+    Description: '[CRITICAL] ARN of the IAM Instance Profile for ECS container instances. Exported from the ecs-instance-role stack.'
+    Type: String
+
+  SecurityGroupId:
+    Description: '[CRITICAL] Security Group ID to attach to ECS container instances. Typically the Backend Security Group from the security-groups stack.'
+    Type: AWS::EC2::SecurityGroup::Id
+
+  ECSClusterName:
+    Description: '[CRITICAL] Name of the ECS cluster this launch template registers instances into. Exported from the ecs-cluster stack.'
+    Type: String
+
+  EBSVolumeSize:
+    Description: '[OPTIONAL] Size in GiB of the root EBS volume for each ECS container instance. Increase if running many large Docker images.'
+    Type: Number
+    Default: 30
+    MinValue: 20
+    MaxValue: 500
+
+  EBSVolumeType:
+    Description: '[OPTIONAL] EBS volume type for the root volume. gp3 provides the best price-performance. Use io2 only for extremely IOPS-intensive workloads.'
+    Type: String
+    Default: gp3
+    AllowedValues: [gp2, gp3, io1, io2]
+
+  EBSEncrypted:
+    Description: '[IMPORTANT] Whether to encrypt the root EBS volume. Strongly recommended for production. Encryption is at-rest using the AWS-managed key by default.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  DetailedMonitoringEnabled:
+    Description: '[OPTIONAL] Enable EC2 detailed monitoring (1-minute CloudWatch metrics). Incurs additional CloudWatch costs; basic monitoring is 5-minute intervals.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  IMDSHttpTokens:
+    Description: '[IMPORTANT] IMDSv2 enforcement mode. "required" enforces IMDSv2 (recommended for security — prevents SSRF-based credential theft). "optional" allows both v1 and v2.'
+    Type: String
+    Default: required
+    AllowedValues: [required, optional]
+
+  IMDSHttpPutResponseHopLimit:
+    Description: '[OPTIONAL] The hop limit for IMDSv2 PUT requests. 1 means only the instance itself can access metadata (most secure). Increase to 2 only if containers need to access IMDS directly.'
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 64
+
+Resources:
+  ECSLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${EnvironmentName}-ecs-lt
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        ImageId: '{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id}}'
+        IamInstanceProfile:
+          Arn: !Ref ECSInstanceProfileArn
+        SecurityGroupIds:
+          - !Ref SecurityGroupId
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: !Ref EBSVolumeSize
+              VolumeType: !Ref EBSVolumeType
+              Encrypted: !Ref EBSEncrypted
+              DeleteOnTermination: true
+        MetadataOptions:
+          HttpTokens: !Ref IMDSHttpTokens
+          HttpEndpoint: enabled
+          HttpPutResponseHopLimit: !Ref IMDSHttpPutResponseHopLimit
+        Monitoring:
+          Enabled: !Ref DetailedMonitoringEnabled
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo ECS_CLUSTER=${ECSClusterName} >> /etc/ecs/ecs.config
+            echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config
+            echo ECS_ENABLE_TASK_IAM_ROLE=true >> /etc/ecs/ecs.config
+            echo ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST=true >> /etc/ecs/ecs.config
+            yum update -y
+            yum install -y amazon-cloudwatch-agent
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub ${EnvironmentName}-ecs-instance
+
+Outputs:
+  LaunchTemplateId:
+    Description: ID of the Launch Template
+    Value: !Ref ECSLaunchTemplate
+    Export:
+      Name: !Sub ${EnvironmentName}-LaunchTemplateId
+  LaunchTemplateLatestVersion:
+    Description: Latest version number of the Launch Template
+    Value: !GetAtt ECSLaunchTemplate.LatestVersionNumber
+    Export:
+      Name: !Sub ${EnvironmentName}-LaunchTemplateLatestVersion

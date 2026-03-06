@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Elastic Container Service (ECS) Cluster'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+
+  ContainerInsightsEnabled:
+    Description: '[IMPORTANT] Enable CloudWatch Container Insights for detailed ECS metrics (CPU, memory, network per task/service). Incurs additional CloudWatch costs — disable for cost-sensitive dev environments.'
+    Type: String
+    Default: enabled
+    AllowedValues: [enabled, disabled]
+
+Resources:
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${EnvironmentName}-cluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: !Ref ContainerInsightsEnabled
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-ecs-cluster
+
+Outputs:
+  ECSClusterName:
+    Description: ECS Cluster Name
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub ${EnvironmentName}-ECSClusterName
+  ECSClusterArn:
+    Description: ECS Cluster ARN
+    Value: !GetAtt ECSCluster.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-ECSClusterArn

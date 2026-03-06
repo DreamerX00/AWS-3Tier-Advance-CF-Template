@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Route53 DNS Setup'
+
+Parameters:
+  HostedZoneName:
+    Description: '[IMPORTANT] Root domain name of your Route53 hosted zone (e.g. example.com). Leave empty to skip DNS record creation. When provided, an A-record alias is created pointing to the Public ALB.'
+    Type: String
+    Default: ''
+
+  ALBDNSName:
+    Description: '[IMPORTANT] DNS name of the Public ALB. Required when HostedZoneName is provided. Exported from the public-alb stack as PublicALBDNSName.'
+    Type: String
+    Default: ''
+
+  ALBHostedZoneId:
+    Description: '[IMPORTANT] The canonical hosted zone ID of the Public ALB (not your Route53 zone). Required for the alias record. Exported from the public-alb stack as PublicALBHostedZoneId.'
+    Type: String
+    Default: ''
+
+  AppSubdomain:
+    Description: '[OPTIONAL] Subdomain prefix for the application DNS record. E.g. "app" creates app.example.com. Leave empty to use the root domain (apex record).'
+    Type: String
+    Default: ''
+
+Conditions:
+  HasDomainName: !Not [ !Equals [ !Ref HostedZoneName, '' ] ]
+  HasALBDNS: !And
+    - !Condition HasDomainName
+    - !Not [ !Equals [ !Ref ALBDNSName, '' ] ]
+  HasSubdomain: !Not [ !Equals [ !Ref AppSubdomain, '' ] ]
+
+Resources:
+  AppDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasALBDNS
+    Properties:
+      HostedZoneName: !Sub '${HostedZoneName}.'
+      Name: !If
+        - HasSubdomain
+        - !Sub '${AppSubdomain}.${HostedZoneName}'
+        - !Ref HostedZoneName
+      Type: A
+      AliasTarget:
+        DNSName: !Ref ALBDNSName
+        HostedZoneId: !Ref ALBHostedZoneId
+        EvaluateTargetHealth: true
+
+Outputs:
+  ZoneProvided:
+    Description: Returns true when a hosted zone name is provided
+    Value: !If [ HasDomainName, 'true', 'false' ]
+  AppDNSName:
+    Description: The fully qualified DNS name of the application (empty if no domain provided)
+    Value: !If
+      - HasALBDNS
+      - !If
+        - HasSubdomain
+        - !Sub '${AppSubdomain}.${HostedZoneName}'
+        - !Ref HostedZoneName
+      - 'No domain configured'

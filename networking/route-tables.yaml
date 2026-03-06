@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Route Tables and Routes'
+
+Parameters:
+  EnvironmentName:
+    Description: '[CRITICAL] An environment name prefixed to all resource names. Must match the value used across all stacks.'
+    Type: String
+    Default: prod
+  NumberOfAZs:
+    Description: '[IMPORTANT] Number of AZs deployed. Must match the VPC stack setting.'
+    Type: Number
+    Default: 3
+    AllowedValues: [2, 3]
+  VpcId:
+    Description: '[CRITICAL] ID of the VPC where route tables will be created. Exported from the VPC stack.'
+    Type: AWS::EC2::VPC::Id
+  InternetGateway:
+    Description: '[CRITICAL] ID of the Internet Gateway for the public route. Exported from the VPC stack.'
+    Type: String
+  NatGateway1:
+    Description: '[CRITICAL] ID of NAT Gateway 1 for private app subnet 1 outbound route. Exported from the NAT stack.'
+    Type: String
+  NatGateway2:
+    Description: '[CRITICAL] ID of NAT Gateway 2 for private app subnet 2 outbound route. Exported from the NAT stack.'
+    Type: String
+  NatGateway3:
+    Description: '[CRITICAL] ID of NAT Gateway 3 for private app subnet 3 outbound route. Only used when NumberOfAZs is 3.'
+    Type: String
+    Default: ''
+  PublicSubnet1:
+    Description: '[CRITICAL] First public subnet to associate with the public route table. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+  PublicSubnet2:
+    Description: '[CRITICAL] Second public subnet to associate with the public route table. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+  PublicSubnet3:
+    Description: '[CRITICAL] Third public subnet to associate with the public route table. Only used when NumberOfAZs is 3.'
+    Type: String
+    Default: ''
+  PrivateAppSubnet1:
+    Description: '[CRITICAL] First private app subnet to associate with NAT route table 1. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+  PrivateAppSubnet2:
+    Description: '[CRITICAL] Second private app subnet to associate with NAT route table 2. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+  PrivateAppSubnet3:
+    Description: '[CRITICAL] Third private app subnet to associate with NAT route table 3. Only used when NumberOfAZs is 3.'
+    Type: String
+    Default: ''
+  PrivateDataSubnet1:
+    Description: '[CRITICAL] First private data subnet to associate with the isolated data route table. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+  PrivateDataSubnet2:
+    Description: '[CRITICAL] Second private data subnet to associate with the isolated data route table. Exported from the VPC stack.'
+    Type: AWS::EC2::Subnet::Id
+  PrivateDataSubnet3:
+    Description: '[CRITICAL] Third private data subnet to associate with the isolated data route table. Only used when NumberOfAZs is 3.'
+    Type: String
+    Default: ''
+
+Conditions:
+  Has3AZs: !Equals [!Ref NumberOfAZs, 3]
+
+Resources:
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: Has3AZs
+    Properties:
+      SubnetId: !Ref PublicSubnet3
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateAppRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-app-rt-1
+
+  PrivateAppRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateAppSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnet1
+      RouteTableId: !Ref PrivateAppRouteTable1
+
+  PrivateAppRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-app-rt-2
+
+  PrivateAppRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+
+  PrivateAppSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnet2
+      RouteTableId: !Ref PrivateAppRouteTable2
+
+  PrivateAppRouteTable3:
+    Type: AWS::EC2::RouteTable
+    Condition: Has3AZs
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-app-rt-3
+
+  PrivateAppRoute3:
+    Type: AWS::EC2::Route
+    Condition: Has3AZs
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTable3
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway3
+
+  PrivateAppSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: Has3AZs
+    Properties:
+      SubnetId: !Ref PrivateAppSubnet3
+      RouteTableId: !Ref PrivateAppRouteTable3
+
+  # Private Data Route Table (no outbound internet for security)
+  PrivateDataRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-data-rt
+
+  PrivateDataSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDataSubnet1
+      RouteTableId: !Ref PrivateDataRouteTable
+
+  PrivateDataSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDataSubnet2
+      RouteTableId: !Ref PrivateDataRouteTable
+
+  PrivateDataSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: Has3AZs
+    Properties:
+      SubnetId: !Ref PrivateDataSubnet3
+      RouteTableId: !Ref PrivateDataRouteTable

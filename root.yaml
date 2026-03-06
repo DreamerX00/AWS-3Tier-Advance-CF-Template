@@ -1,0 +1,1297 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Three-Tier Architecture: Root Stack orchestrating all nested stacks'
+
+Parameters:
+  # ================================================================
+  # GLOBAL
+  # ================================================================
+  EnvironmentName:
+    Description: '[CRITICAL] Environment name prefixed to ALL resource names (e.g. prod, staging, dev). Must be lowercase alphanumeric with hyphens. Changing this after deployment recreates all exports and breaks cross-stack references.'
+    Type: String
+    Default: prod
+    AllowedPattern: '^[a-z][a-z0-9-]{1,20}$'
+    ConstraintDescription: 'Use lowercase letters, numbers, and hyphens only (2-21 chars).'
+
+  TemplatesBucketName:
+    Description: '[CRITICAL] S3 bucket containing all nested CloudFormation templates. Must be in the same region as this stack.'
+    Type: String
+
+  TemplatesPrefix:
+    Description: '[IMPORTANT] S3 key prefix where nested templates are stored inside the bucket. Do not include trailing slash.'
+    Type: String
+    Default: Three-Tier
+
+  # ================================================================
+  # STORAGE (S3)
+  # ================================================================
+  AssetsBucketEncryptionAlgorithm:
+    Description: '[OPTIONAL] Server-side encryption algorithm for assets bucket.'
+    Type: String
+    Default: AES256
+    AllowedValues: [AES256, 'aws:kms']
+
+  AssetsNoncurrentVersionExpiryDays:
+    Description: '[OPTIONAL] Days before noncurrent object versions expire in assets bucket.'
+    Type: Number
+    Default: 90
+
+  AssetsTransitionDays:
+    Description: '[OPTIONAL] Days before objects transition to cheaper storage class in assets bucket.'
+    Type: Number
+    Default: 30
+
+  AssetsTransitionStorageClass:
+    Description: '[OPTIONAL] Storage class to transition assets to after AssetsTransitionDays.'
+    Type: String
+    Default: STANDARD_IA
+    AllowedValues: [STANDARD_IA, ONEZONE_IA, INTELLIGENT_TIERING, GLACIER, DEEP_ARCHIVE]
+
+  AccessLogsBucketEncryptionAlgorithm:
+    Description: '[OPTIONAL] Server-side encryption algorithm for access logs bucket.'
+    Type: String
+    Default: AES256
+    AllowedValues: [AES256, 'aws:kms']
+
+  EnableAssetsVersioning:
+    Description: '[OPTIONAL] Enable versioning on the assets S3 bucket.'
+    Type: String
+    Default: Enabled
+    AllowedValues: [Enabled, Suspended]
+
+  # ================================================================
+  # NETWORKING
+  # ================================================================
+  NumberOfAZs:
+    Description: '[IMPORTANT] Number of Availability Zones to deploy across. Use 2 for regions with only 2 AZs or for dev cost savings. Use 3 for production HA.'
+    Type: Number
+    Default: 3
+    AllowedValues: [2, 3]
+
+  VpcCIDR:
+    Description: '[CRITICAL] CIDR block for the VPC. Ensure no overlap with other VPCs if VPC Peering is planned.'
+    Type: String
+    Default: 10.0.0.0/16
+
+  EnableDnsSupport:
+    Description: '[OPTIONAL] Enable DNS resolution in the VPC. Required for ECS and SSM.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnableDnsHostnames:
+    Description: '[OPTIONAL] Enable DNS hostnames in the VPC.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  VpcFlowLogRetentionDays:
+    Description: '[IMPORTANT] Days to retain VPC Flow Logs. Increase for compliance environments.'
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+
+  VpcFlowLogTrafficType:
+    Description: '[OPTIONAL] Traffic type to capture in VPC Flow Logs (ACCEPT, REJECT, or ALL).'
+    Type: String
+    Default: ALL
+    AllowedValues: [ACCEPT, REJECT, ALL]
+
+  # Subnet CIDRs
+  PublicSubnet1CIDR:
+    Description: '[IMPORTANT] CIDR for public subnet in 1st AZ. Must fall within VpcCIDR range.'
+    Type: String
+    Default: 10.0.1.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PublicSubnet2CIDR:
+    Description: '[IMPORTANT] CIDR for public subnet in 2nd AZ. Must fall within VpcCIDR range.'
+    Type: String
+    Default: 10.0.2.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PublicSubnet3CIDR:
+    Description: '[IMPORTANT] CIDR for public subnet in 3rd AZ. Must fall within VpcCIDR range.'
+    Type: String
+    Default: 10.0.3.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateAppSubnet1CIDR:
+    Description: '[IMPORTANT] CIDR for private app subnet in 1st AZ. Hosts ECS tasks.'
+    Type: String
+    Default: 10.0.11.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateAppSubnet2CIDR:
+    Description: '[IMPORTANT] CIDR for private app subnet in 2nd AZ. Hosts ECS tasks.'
+    Type: String
+    Default: 10.0.12.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateAppSubnet3CIDR:
+    Description: '[IMPORTANT] CIDR for private app subnet in 3rd AZ. Hosts ECS tasks.'
+    Type: String
+    Default: 10.0.13.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateDataSubnet1CIDR:
+    Description: '[IMPORTANT] CIDR for private data subnet in 1st AZ. Hosts RDS.'
+    Type: String
+    Default: 10.0.21.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateDataSubnet2CIDR:
+    Description: '[IMPORTANT] CIDR for private data subnet in 2nd AZ. Hosts RDS.'
+    Type: String
+    Default: 10.0.22.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  PrivateDataSubnet3CIDR:
+    Description: '[IMPORTANT] CIDR for private data subnet in 3rd AZ. Hosts RDS.'
+    Type: String
+    Default: 10.0.23.0/24
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+
+  # Security Group Ports
+  HttpPort:
+    Description: '[OPTIONAL] HTTP port for ALB listener and frontend ingress.'
+    Type: Number
+    Default: 80
+
+  HttpsPort:
+    Description: '[OPTIONAL] HTTPS port for inbound internet and NAT egress.'
+    Type: Number
+    Default: 443
+
+  FrontendAppPort:
+    Description: '[IMPORTANT] Port the frontend container listens on. Must match FrontendContainerPort. Default 80 aligns with FrontendContainerPort default.'
+    Type: Number
+    Default: 80
+
+  BackendAppPort:
+    Description: '[IMPORTANT] Port the backend container listens on. Must match BackendContainerPort.'
+    Type: Number
+    Default: 8080
+
+  DatabasePort:
+    Description: '[IMPORTANT] Database port (3306 MySQL, 5432 PostgreSQL). Must match DBPort in RDS.'
+    Type: Number
+    Default: 3306
+
+  AllowedIngressCIDR:
+    Description: '[IMPORTANT] CIDR allowed to reach the Public ALB. 0.0.0.0/0 is open internet — restrict for non-public environments.'
+    Type: String
+    Default: '0.0.0.0/0'
+
+  # ================================================================
+  # COMPUTE - ECS CLUSTER
+  # ================================================================
+  ContainerInsightsEnabled:
+    Description: '[IMPORTANT] Enable CloudWatch Container Insights for ECS. Incurs additional cost.'
+    Type: String
+    Default: enabled
+    AllowedValues: [enabled, disabled]
+
+  # COMPUTE - LAUNCH TEMPLATE
+  InstanceType:
+    Description: '[IMPORTANT] EC2 instance type for ECS container instances. Use t3.medium+ for production.'
+    Type: String
+    Default: t3.micro
+
+  EBSVolumeSize:
+    Description: '[OPTIONAL] Root EBS volume size in GiB for ECS instances.'
+    Type: Number
+    Default: 30
+
+  EBSVolumeType:
+    Description: '[OPTIONAL] EBS volume type (gp3 recommended).'
+    Type: String
+    Default: gp3
+    AllowedValues: [gp2, gp3, io1, io2]
+
+  EBSEncrypted:
+    Description: '[IMPORTANT] Encrypt root EBS volume. Recommended for all environments.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  IMDSHttpTokens:
+    Description: '[IMPORTANT] IMDSv2 enforcement. "required" is the secure default — prevents SSRF attacks.'
+    Type: String
+    Default: required
+    AllowedValues: [required, optional]
+
+  DetailedMonitoringEnabled:
+    Description: '[OPTIONAL] Enable detailed CloudWatch monitoring on EC2 instances.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  IMDSHttpPutResponseHopLimit:
+    Description: '[OPTIONAL] IMDS HTTP PUT response hop limit for containers.'
+    Type: Number
+    Default: 1
+
+  # COMPUTE - AUTO SCALING
+  ASGMinSize:
+    Description: '[IMPORTANT] Minimum EC2 instances in ASG. Set >= 2 for production availability.'
+    Type: Number
+    Default: 2
+
+  ASGMaxSize:
+    Description: '[IMPORTANT] Maximum EC2 instances ASG can scale to.'
+    Type: Number
+    Default: 6
+
+  ASGDesiredCapacity:
+    Description: '[IMPORTANT] Desired EC2 instances at launch. ECS Managed Scaling adjusts dynamically.'
+    Type: Number
+    Default: 3
+
+  CapacityProviderTargetCapacity:
+    Description: '[OPTIONAL] ECS Capacity Provider target utilisation percentage (1-100).'
+    Type: Number
+    Default: 100
+
+  HealthCheckType:
+    Description: '[OPTIONAL] ASG health check type (EC2 or ELB).'
+    Type: String
+    Default: EC2
+    AllowedValues: [EC2, ELB]
+
+  HealthCheckGracePeriod:
+    Description: '[OPTIONAL] Seconds before ASG starts checking instance health after launch.'
+    Type: Number
+    Default: 300
+
+  ManagedTerminationProtection:
+    Description: '[OPTIONAL] ECS managed termination protection for capacity provider.'
+    Type: String
+    Default: DISABLED
+    AllowedValues: [ENABLED, DISABLED]
+
+  # COMPUTE - LAUNCH TYPE
+  FrontendLaunchType:
+    Description: '[IMPORTANT] ECS launch type for frontend. FARGATE is serverless. EC2 uses your ASG instances.'
+    Type: String
+    Default: FARGATE
+    AllowedValues: [FARGATE, EC2]
+
+  BackendLaunchType:
+    Description: '[IMPORTANT] ECS launch type for backend. FARGATE is serverless. EC2 uses your ASG instances.'
+    Type: String
+    Default: FARGATE
+    AllowedValues: [FARGATE, EC2]
+
+  # COMPUTE - TASKS
+  FrontendImageTag:
+    Description: '[IMPORTANT] Docker image tag for the frontend. Use a specific version in production.'
+    Type: String
+    Default: latest
+
+  BackendImageTag:
+    Description: '[IMPORTANT] Docker image tag for the backend. Use a specific version in production.'
+    Type: String
+    Default: latest
+
+  FrontendCPU:
+    Description: '[IMPORTANT] CPU units for frontend tasks (256 = 0.25 vCPU).'
+    Type: String
+    Default: '256'
+    AllowedValues: ['256', '512', '1024', '2048', '4096']
+
+  FrontendMemory:
+    Description: '[IMPORTANT] Memory (MiB) for frontend tasks. Must be a valid Fargate combination for FrontendCPU.'
+    Type: String
+    Default: '512'
+    AllowedValues: ['512', '1024', '2048', '4096', '8192', '16384']
+
+  FrontendContainerPort:
+    Description: '[IMPORTANT] Port the frontend container listens on.'
+    Type: Number
+    Default: 80
+
+  BackendCPU:
+    Description: '[IMPORTANT] CPU units for backend tasks (256 = 0.25 vCPU).'
+    Type: String
+    Default: '256'
+    AllowedValues: ['256', '512', '1024', '2048', '4096']
+
+  BackendMemory:
+    Description: '[IMPORTANT] Memory (MiB) for backend tasks. Must be valid for BackendCPU.'
+    Type: String
+    Default: '512'
+    AllowedValues: ['512', '1024', '2048', '4096', '8192', '16384']
+
+  BackendContainerPort:
+    Description: '[IMPORTANT] Port the backend container listens on.'
+    Type: Number
+    Default: 8080
+
+  FrontendNetworkMode:
+    Description: '[OPTIONAL] Docker networking mode for frontend task.'
+    Type: String
+    Default: awsvpc
+    AllowedValues: [awsvpc, bridge, host, none]
+
+  FrontendLogStreamPrefix:
+    Description: '[OPTIONAL] CloudWatch Logs stream prefix for frontend containers.'
+    Type: String
+    Default: frontend
+
+  BackendNetworkMode:
+    Description: '[OPTIONAL] Docker networking mode for backend task.'
+    Type: String
+    Default: awsvpc
+    AllowedValues: [awsvpc, bridge, host, none]
+
+  BackendLogStreamPrefix:
+    Description: '[OPTIONAL] CloudWatch Logs stream prefix for backend containers.'
+    Type: String
+    Default: backend
+
+  # COMPUTE - SERVICES
+  FrontendDesiredCount:
+    Description: '[IMPORTANT] Desired frontend task replicas. Min 2 for production HA.'
+    Type: Number
+    Default: 2
+
+  FrontendScaleMinCapacity:
+    Description: '[IMPORTANT] Minimum frontend task replicas (auto scaling floor).'
+    Type: Number
+    Default: 2
+
+  FrontendScaleMaxCapacity:
+    Description: '[IMPORTANT] Maximum frontend task replicas (auto scaling ceiling).'
+    Type: Number
+    Default: 6
+
+  FrontendScaleCpuTarget:
+    Description: '[OPTIONAL] Target CPU % for frontend auto scaling.'
+    Type: Number
+    Default: 70
+
+  BackendDesiredCount:
+    Description: '[IMPORTANT] Desired backend task replicas. Min 2 for production HA.'
+    Type: Number
+    Default: 2
+
+  BackendScaleMinCapacity:
+    Description: '[IMPORTANT] Minimum backend task replicas (auto scaling floor).'
+    Type: Number
+    Default: 2
+
+  BackendScaleMaxCapacity:
+    Description: '[IMPORTANT] Maximum backend task replicas (auto scaling ceiling).'
+    Type: Number
+    Default: 6
+
+  BackendScaleCpuTarget:
+    Description: '[OPTIONAL] Target CPU % for backend auto scaling.'
+    Type: Number
+    Default: 70
+
+  FrontendMaximumPercent:
+    Description: '[OPTIONAL] Upper limit on running frontend tasks as a percentage of desired count during deployment.'
+    Type: Number
+    Default: 200
+
+  FrontendMinimumHealthyPercent:
+    Description: '[OPTIONAL] Lower limit on running frontend tasks as a percentage of desired count during deployment.'
+    Type: Number
+    Default: 100
+
+  FrontendHealthCheckGracePeriod:
+    Description: '[OPTIONAL] Seconds before ECS starts health checking newly launched frontend tasks.'
+    Type: Number
+    Default: 60
+
+  FrontendScaleInCooldown:
+    Description: '[OPTIONAL] Cooldown in seconds after a frontend scale-in activity.'
+    Type: Number
+    Default: 300
+
+  FrontendScaleOutCooldown:
+    Description: '[OPTIONAL] Cooldown in seconds after a frontend scale-out activity.'
+    Type: Number
+    Default: 60
+
+  FrontendListenerRulePriority:
+    Description: '[OPTIONAL] Priority for frontend ALB listener rule.'
+    Type: Number
+    Default: 1
+
+  FrontendPathPattern:
+    Description: '[OPTIONAL] URL path pattern for frontend ALB listener rule.'
+    Type: String
+    Default: '/*'
+
+  FrontendEnableExecuteCommand:
+    Description: '[OPTIONAL] Enable ECS Exec for frontend tasks (debugging).'
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
+  BackendMaximumPercent:
+    Description: '[OPTIONAL] Upper limit on running backend tasks as a percentage of desired count during deployment.'
+    Type: Number
+    Default: 200
+
+  BackendMinimumHealthyPercent:
+    Description: '[OPTIONAL] Lower limit on running backend tasks as a percentage of desired count during deployment.'
+    Type: Number
+    Default: 100
+
+  BackendHealthCheckGracePeriod:
+    Description: '[OPTIONAL] Seconds before ECS starts health checking newly launched backend tasks.'
+    Type: Number
+    Default: 60
+
+  BackendScaleInCooldown:
+    Description: '[OPTIONAL] Cooldown in seconds after a backend scale-in activity.'
+    Type: Number
+    Default: 300
+
+  BackendScaleOutCooldown:
+    Description: '[OPTIONAL] Cooldown in seconds after a backend scale-out activity.'
+    Type: Number
+    Default: 60
+
+  BackendListenerRulePriority:
+    Description: '[OPTIONAL] Priority for backend ALB listener rule.'
+    Type: Number
+    Default: 1
+
+  BackendPathPattern:
+    Description: '[OPTIONAL] URL path pattern for backend ALB listener rule.'
+    Type: String
+    Default: '/*'
+
+  BackendEnableExecuteCommand:
+    Description: '[OPTIONAL] Enable ECS Exec for backend tasks (debugging).'
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
+  # ================================================================
+  # DATABASE
+  # ================================================================
+  DatabaseName:
+    Description: '[IMPORTANT] Application database name. Must match across RDS and backend task config.'
+    Type: String
+    Default: threetierdb
+
+  DBInstanceClass:
+    Description: '[IMPORTANT] RDS instance class. Use db.t3.medium+ for production.'
+    Type: String
+    Default: db.t3.micro
+
+  DBAllocatedStorage:
+    Description: '[IMPORTANT] Initial RDS storage in GiB.'
+    Type: Number
+    Default: 20
+
+  MaxAllocatedStorage:
+    Description: '[IMPORTANT] Maximum RDS storage autoscaling ceiling in GiB.'
+    Type: Number
+    Default: 100
+
+  DBEngine:
+    Description: '[IMPORTANT] Database engine (mysql, postgres, mariadb).'
+    Type: String
+    Default: mysql
+    AllowedValues: [mysql, postgres, mariadb]
+
+  DBEngineVersion:
+    Description: '[IMPORTANT] Database engine version string.'
+    Type: String
+    Default: '8.0'
+
+  MultiAZ:
+    Description: '[CRITICAL] Enable RDS Multi-AZ for high availability. Set to false only for dev/test to reduce cost. NEVER false in production.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  DBBackupRetentionPeriod:
+    Description: '[IMPORTANT] Days to retain automated RDS backups. 0 disables. Minimum 7 for production.'
+    Type: Number
+    Default: 7
+
+  DBDeletionProtection:
+    Description: '[CRITICAL] RDS deletion protection. Always true in production.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  DBAdminUsername:
+    Description: '[CRITICAL] RDS master username stored in Secrets Manager. Avoid "admin" or "root".'
+    Type: String
+    Default: dbadmin
+    NoEcho: true
+
+  DBPort:
+    Description: '[OPTIONAL] Port for RDS instance to listen on.'
+    Type: Number
+    Default: 3306
+
+  StorageType:
+    Description: '[OPTIONAL] RDS storage type.'
+    Type: String
+    Default: gp3
+    AllowedValues: [gp2, gp3, io1, io2]
+
+  StorageEncrypted:
+    Description: '[IMPORTANT] Enable encryption at rest for RDS.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  CopyTagsToSnapshot:
+    Description: '[OPTIONAL] Copy tags to RDS snapshots.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnablePerformanceInsights:
+    Description: '[OPTIONAL] Enable RDS Performance Insights.'
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
+  PerformanceInsightsRetentionPeriod:
+    Description: '[OPTIONAL] Days to retain Performance Insights data (7 free tier, 731 max).'
+    Type: Number
+    Default: 7
+
+  MonitoringInterval:
+    Description: '[OPTIONAL] Enhanced Monitoring interval in seconds (0 to disable).'
+    Type: Number
+    Default: 0
+    AllowedValues: [0, 1, 5, 10, 15, 30, 60]
+
+  PreferredMaintenanceWindow:
+    Description: '[OPTIONAL] Weekly maintenance window for RDS (UTC).'
+    Type: String
+    Default: 'Sun:03:00-Sun:04:00'
+
+  PreferredBackupWindow:
+    Description: '[OPTIONAL] Daily backup window for RDS (UTC). Must not overlap maintenance window.'
+    Type: String
+    Default: '01:00-02:00'
+
+  AutoMinorVersionUpgrade:
+    Description: '[OPTIONAL] Enable automatic minor version upgrades for RDS.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  # ================================================================
+  # LOAD BALANCER
+  # ================================================================
+  ALBIdleTimeout:
+    Description: '[OPTIONAL] Public ALB connection idle timeout in seconds.'
+    Type: Number
+    Default: 60
+
+  FrontendHealthCheckPath:
+    Description: '[OPTIONAL] Health check path for the frontend target group.'
+    Type: String
+    Default: '/'
+
+  BackendHealthCheckPath:
+    Description: '[IMPORTANT] Health check path for the backend target group. Use a lightweight /api/health endpoint.'
+    Type: String
+    Default: '/api/health'
+
+  ACMCertificateArn:
+    Description: '[IMPORTANT] ARN of ACM certificate for HTTPS on public ALB. Leave empty to use HTTP only.'
+    Type: String
+    Default: ''
+
+  SSLPolicy:
+    Description: '[OPTIONAL] TLS security policy for HTTPS listener.'
+    Type: String
+    Default: ELBSecurityPolicy-TLS13-1-2-2021-06
+    AllowedValues:
+      - ELBSecurityPolicy-TLS13-1-2-2021-06
+      - ELBSecurityPolicy-TLS13-1-3-2021-06
+      - ELBSecurityPolicy-FS-1-2-Res-2020-10
+      - ELBSecurityPolicy-2016-08
+
+  DeregistrationDelay:
+    Description: '[OPTIONAL] Connection draining timeout in seconds for target group deregistration.'
+    Type: Number
+    Default: 30
+
+  # Target Group parameters
+  HealthCheckIntervalSeconds:
+    Description: '[OPTIONAL] Seconds between health checks for target groups.'
+    Type: Number
+    Default: 30
+
+  HealthCheckTimeoutSeconds:
+    Description: '[OPTIONAL] Seconds before a health check times out.'
+    Type: Number
+    Default: 5
+
+  HealthyThresholdCount:
+    Description: '[OPTIONAL] Consecutive health checks required to mark target healthy.'
+    Type: Number
+    Default: 2
+
+  UnhealthyThresholdCount:
+    Description: '[OPTIONAL] Consecutive failed health checks to mark target unhealthy.'
+    Type: Number
+    Default: 3
+
+  MatcherHttpCode:
+    Description: '[OPTIONAL] HTTP status code(s) for a successful health check response.'
+    Type: String
+    Default: '200'
+
+  StickinessEnabled:
+    Description: '[OPTIONAL] Enable sticky sessions on target groups.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  StickinessDurationSeconds:
+    Description: '[OPTIONAL] Duration in seconds for sticky session cookies.'
+    Type: Number
+    Default: 86400
+
+  # Public ALB parameters
+  ALBDeletionProtection:
+    Description: '[IMPORTANT] Enable deletion protection on public ALB.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  ALBHTTP2Enabled:
+    Description: '[OPTIONAL] Enable HTTP/2 on public ALB.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  ALBDropInvalidHeaders:
+    Description: '[OPTIONAL] Drop invalid HTTP headers on public ALB.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  ALBAccessLogsEnabled:
+    Description: '[OPTIONAL] Enable access logging on public ALB to S3.'
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
+  ALBListenerPort:
+    Description: '[OPTIONAL] HTTP listener port for the public ALB.'
+    Type: Number
+    Default: 80
+
+  # Internal ALB parameters
+  InternalALBIdleTimeout:
+    Description: '[OPTIONAL] Internal ALB connection idle timeout in seconds.'
+    Type: Number
+    Default: 60
+
+  InternalALBDeletionProtection:
+    Description: '[IMPORTANT] Enable deletion protection on internal ALB.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  InternalALBHTTP2Enabled:
+    Description: '[OPTIONAL] Enable HTTP/2 on internal ALB.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  InternalALBDropInvalidHeaders:
+    Description: '[OPTIONAL] Drop invalid HTTP headers on internal ALB.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  InternalALBListenerPort:
+    Description: '[OPTIONAL] HTTP listener port for the internal ALB.'
+    Type: Number
+    Default: 80
+
+  # ================================================================
+  # MONITORING & AUDIT
+  # ================================================================
+  LogRetentionDays:
+    Description: '[IMPORTANT] CloudWatch Log retention in days for application logs.'
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+
+  IsMultiRegionTrail:
+    Description: '[IMPORTANT] Enable CloudTrail multi-region trail.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  FrontendLogGroupSuffix:
+    Description: '[OPTIONAL] Suffix appended to CloudWatch log group name for frontend.'
+    Type: String
+    Default: frontend
+
+  BackendLogGroupSuffix:
+    Description: '[OPTIONAL] Suffix appended to CloudWatch log group name for backend.'
+    Type: String
+    Default: backend
+
+  EnableLogFileValidation:
+    Description: '[OPTIONAL] Enable CloudTrail log file integrity validation.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  IncludeGlobalServiceEvents:
+    Description: '[OPTIONAL] Include global service events (IAM, STS) in CloudTrail.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  TrailBucketEncryptionAlgorithm:
+    Description: '[OPTIONAL] Server-side encryption algorithm for CloudTrail S3 bucket.'
+    Type: String
+    Default: AES256
+    AllowedValues: [AES256, 'aws:kms']
+
+  IsLogging:
+    Description: '[OPTIONAL] Enable or disable CloudTrail logging.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  # ================================================================
+  # SECURITY (WAF)
+  # ================================================================
+  WAFScope:
+    Description: '[IMPORTANT] WAF scope: REGIONAL for ALB, CLOUDFRONT for CloudFront distributions.'
+    Type: String
+    Default: REGIONAL
+    AllowedValues: [REGIONAL, CLOUDFRONT]
+
+  RateLimitThreshold:
+    Description: '[CRITICAL] WAF rate limit — max requests per IP per 5-minute window. Tune based on real traffic patterns.'
+    Type: Number
+    Default: 2000
+
+  EnableCommonRuleSet:
+    Description: '[IMPORTANT] Enable AWS Managed Common Rule Set (OWASP Top 10 protections).'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnableSQLiRuleSet:
+    Description: '[IMPORTANT] Enable SQL injection protection rule set.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnableKnownBadInputsRuleSet:
+    Description: '[OPTIONAL] Enable AWS Known Bad Inputs managed rule set.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  EnableSampledRequests:
+    Description: '[OPTIONAL] Enable WAF sampled requests for monitoring.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  # ================================================================
+  # SECURITY (SECRETS)
+  # ================================================================
+  PasswordLength:
+    Description: '[OPTIONAL] Length of auto-generated database password in Secrets Manager.'
+    Type: Number
+    Default: 32
+
+  PasswordExcludeChars:
+    Description: '[OPTIONAL] Characters to exclude from generated password.'
+    Type: String
+    Default: '"@/\\'
+
+  RequireEachCharType:
+    Description: '[OPTIONAL] Require at least one of each character type in generated password.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  # ================================================================
+  # REGISTRY (ECR)
+  # ================================================================
+  ImageTagMutability:
+    Description: '[IMPORTANT] ECR image tag mutability. IMMUTABLE recommended for production.'
+    Type: String
+    Default: IMMUTABLE
+    AllowedValues: [IMMUTABLE, MUTABLE]
+
+  MaxImageCount:
+    Description: '[OPTIONAL] Maximum images to retain per ECR repository.'
+    Type: Number
+    Default: 10
+
+  ScanOnPush:
+    Description: '[OPTIONAL] Enable image vulnerability scanning on push to ECR.'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  ECREncryptionType:
+    Description: '[OPTIONAL] Encryption type for ECR repositories.'
+    Type: String
+    Default: AES256
+    AllowedValues: [AES256, KMS]
+
+  # ================================================================
+  # DNS
+  # ================================================================
+  HostedZoneName:
+    Description: '[IMPORTANT] Route53 hosted zone domain name (e.g. example.com). Leave empty to skip DNS record creation.'
+    Type: String
+    Default: ''
+
+  AppSubdomain:
+    Description: '[OPTIONAL] Subdomain for the app DNS record (e.g. "app" creates app.example.com). Leave empty for apex record.'
+    Type: String
+    Default: ''
+
+Conditions:
+  Has3AZs: !Equals [!Ref NumberOfAZs, 3]
+
+Resources:
+  # -------------------------------------------------------------
+  # 1. STORAGE, REGISTRY, SECRETS, MONITORING, IAM, WAF
+  # -------------------------------------------------------------
+  S3Stack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/storage/s3.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        AssetsBucketEncryptionAlgorithm: !Ref AssetsBucketEncryptionAlgorithm
+        AssetsNoncurrentVersionExpiryDays: !Ref AssetsNoncurrentVersionExpiryDays
+        AssetsTransitionDays: !Ref AssetsTransitionDays
+        AssetsTransitionStorageClass: !Ref AssetsTransitionStorageClass
+        AccessLogsBucketEncryptionAlgorithm: !Ref AccessLogsBucketEncryptionAlgorithm
+        EnableAssetsVersioning: !Ref EnableAssetsVersioning
+
+  ECRStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/registry/ecr.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        ImageTagMutability: !Ref ImageTagMutability
+        MaxImageCount: !Ref MaxImageCount
+        ScanOnPush: !Ref ScanOnPush
+        ECREncryptionType: !Ref ECREncryptionType
+
+  SecretsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/secrets/secrets.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        DBAdminUsername: !Ref DBAdminUsername
+        PasswordLength: !Ref PasswordLength
+        PasswordExcludeChars: !Ref PasswordExcludeChars
+        RequireEachCharType: !Ref RequireEachCharType
+
+  WAFStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/security/waf.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        WAFScope: !Ref WAFScope
+        RateLimitThreshold: !Ref RateLimitThreshold
+        EnableCommonRuleSet: !Ref EnableCommonRuleSet
+        EnableSQLiRuleSet: !Ref EnableSQLiRuleSet
+        EnableKnownBadInputsRuleSet: !Ref EnableKnownBadInputsRuleSet
+        EnableSampledRequests: !Ref EnableSampledRequests
+
+  CloudWatchStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/monitoring/cloudwatch.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        LogRetentionDays: !Ref LogRetentionDays
+        FrontendLogGroupSuffix: !Ref FrontendLogGroupSuffix
+        BackendLogGroupSuffix: !Ref BackendLogGroupSuffix
+
+  CloudTrailStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/monitoring/cloudtrail.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        IsMultiRegionTrail: !Ref IsMultiRegionTrail
+        EnableLogFileValidation: !Ref EnableLogFileValidation
+        IncludeGlobalServiceEvents: !Ref IncludeGlobalServiceEvents
+        TrailBucketEncryptionAlgorithm: !Ref TrailBucketEncryptionAlgorithm
+        IsLogging: !Ref IsLogging
+
+  ECSInstanceRoleStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/iam/ecs-instance-role.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+
+  ECSTaskRoleStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/iam/ecs-task-role.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+
+  # -------------------------------------------------------------
+  # 2. NETWORKING
+  # -------------------------------------------------------------
+  VpcStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/networking/vpc.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        VpcCIDR: !Ref VpcCIDR
+        NumberOfAZs: !Ref NumberOfAZs
+        EnableDnsSupport: !Ref EnableDnsSupport
+        EnableDnsHostnames: !Ref EnableDnsHostnames
+        VpcFlowLogRetentionDays: !Ref VpcFlowLogRetentionDays
+        VpcFlowLogTrafficType: !Ref VpcFlowLogTrafficType
+        PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
+        PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+        PublicSubnet3CIDR: !Ref PublicSubnet3CIDR
+        PrivateAppSubnet1CIDR: !Ref PrivateAppSubnet1CIDR
+        PrivateAppSubnet2CIDR: !Ref PrivateAppSubnet2CIDR
+        PrivateAppSubnet3CIDR: !Ref PrivateAppSubnet3CIDR
+        PrivateDataSubnet1CIDR: !Ref PrivateDataSubnet1CIDR
+        PrivateDataSubnet2CIDR: !Ref PrivateDataSubnet2CIDR
+        PrivateDataSubnet3CIDR: !Ref PrivateDataSubnet3CIDR
+
+  SecurityGroupsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/networking/security-groups.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        VpcId: !GetAtt VpcStack.Outputs.VpcId
+        HttpPort: !Ref HttpPort
+        HttpsPort: !Ref HttpsPort
+        FrontendAppPort: !Ref FrontendAppPort
+        BackendAppPort: !Ref BackendAppPort
+        DatabasePort: !Ref DatabasePort
+        AllowedIngressCIDR: !Ref AllowedIngressCIDR
+
+  NatStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/networking/nat.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        NumberOfAZs: !Ref NumberOfAZs
+        PublicSubnet1: !GetAtt VpcStack.Outputs.PublicSubnet1
+        PublicSubnet2: !GetAtt VpcStack.Outputs.PublicSubnet2
+        PublicSubnet3: !If [Has3AZs, !GetAtt VpcStack.Outputs.PublicSubnet3, '']
+
+  RouteTablesStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/networking/route-tables.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        NumberOfAZs: !Ref NumberOfAZs
+        VpcId: !GetAtt VpcStack.Outputs.VpcId
+        InternetGateway: !GetAtt VpcStack.Outputs.InternetGateway
+        NatGateway1: !GetAtt NatStack.Outputs.NatGateway1
+        NatGateway2: !GetAtt NatStack.Outputs.NatGateway2
+        NatGateway3: !If [Has3AZs, !GetAtt NatStack.Outputs.NatGateway3, '']
+        PublicSubnet1: !GetAtt VpcStack.Outputs.PublicSubnet1
+        PublicSubnet2: !GetAtt VpcStack.Outputs.PublicSubnet2
+        PublicSubnet3: !If [Has3AZs, !GetAtt VpcStack.Outputs.PublicSubnet3, '']
+        PrivateAppSubnet1: !GetAtt VpcStack.Outputs.PrivateAppSubnet1
+        PrivateAppSubnet2: !GetAtt VpcStack.Outputs.PrivateAppSubnet2
+        PrivateAppSubnet3: !If [Has3AZs, !GetAtt VpcStack.Outputs.PrivateAppSubnet3, '']
+        PrivateDataSubnet1: !GetAtt VpcStack.Outputs.PrivateDataSubnet1
+        PrivateDataSubnet2: !GetAtt VpcStack.Outputs.PrivateDataSubnet2
+        PrivateDataSubnet3: !If [Has3AZs, !GetAtt VpcStack.Outputs.PrivateDataSubnet3, '']
+
+  # -------------------------------------------------------------
+  # 3. DATABASE
+  # -------------------------------------------------------------
+  DBSubnetGroupStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/database/db-subnet-group.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        NumberOfAZs: !Ref NumberOfAZs
+        PrivateDataSubnet1: !GetAtt VpcStack.Outputs.PrivateDataSubnet1
+        PrivateDataSubnet2: !GetAtt VpcStack.Outputs.PrivateDataSubnet2
+        PrivateDataSubnet3: !If [Has3AZs, !GetAtt VpcStack.Outputs.PrivateDataSubnet3, '']
+
+  RDSStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/database/rds.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        DBSubnetGroupName: !GetAtt DBSubnetGroupStack.Outputs.DBSubnetGroupName
+        DatabaseSecurityGroupId: !GetAtt SecurityGroupsStack.Outputs.DatabaseSecurityGroupId
+        DatabaseName: !Ref DatabaseName
+        DBInstanceClass: !Ref DBInstanceClass
+        DBAllocatedStorage: !Ref DBAllocatedStorage
+        MaxAllocatedStorage: !Ref MaxAllocatedStorage
+        DBEngine: !Ref DBEngine
+        DBEngineVersion: !Ref DBEngineVersion
+        MultiAZ: !Ref MultiAZ
+        BackupRetentionPeriod: !Ref DBBackupRetentionPeriod
+        DeletionProtection: !Ref DBDeletionProtection
+        DBPort: !Ref DBPort
+        StorageType: !Ref StorageType
+        StorageEncrypted: !Ref StorageEncrypted
+        CopyTagsToSnapshot: !Ref CopyTagsToSnapshot
+        EnablePerformanceInsights: !Ref EnablePerformanceInsights
+        PerformanceInsightsRetentionPeriod: !Ref PerformanceInsightsRetentionPeriod
+        MonitoringInterval: !Ref MonitoringInterval
+        PreferredMaintenanceWindow: !Ref PreferredMaintenanceWindow
+        PreferredBackupWindow: !Ref PreferredBackupWindow
+        AutoMinorVersionUpgrade: !Ref AutoMinorVersionUpgrade
+
+  # -------------------------------------------------------------
+  # 4. LOAD BALANCING
+  # -------------------------------------------------------------
+  TargetGroupsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/loadbalancer/target-groups.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        VpcId: !GetAtt VpcStack.Outputs.VpcId
+        FrontendTGPort: !Ref FrontendContainerPort
+        BackendTGPort: !Ref BackendContainerPort
+        FrontendHealthCheckPath: !Ref FrontendHealthCheckPath
+        BackendHealthCheckPath: !Ref BackendHealthCheckPath
+        DeregistrationDelay: !Ref DeregistrationDelay
+        HealthCheckIntervalSeconds: !Ref HealthCheckIntervalSeconds
+        HealthCheckTimeoutSeconds: !Ref HealthCheckTimeoutSeconds
+        HealthyThresholdCount: !Ref HealthyThresholdCount
+        UnhealthyThresholdCount: !Ref UnhealthyThresholdCount
+        MatcherHttpCode: !Ref MatcherHttpCode
+        StickinessEnabled: !Ref StickinessEnabled
+        StickinessDurationSeconds: !Ref StickinessDurationSeconds
+
+  PublicALBStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/loadbalancer/public-alb.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        NumberOfAZs: !Ref NumberOfAZs
+        PublicSubnet1: !GetAtt VpcStack.Outputs.PublicSubnet1
+        PublicSubnet2: !GetAtt VpcStack.Outputs.PublicSubnet2
+        PublicSubnet3: !If [Has3AZs, !GetAtt VpcStack.Outputs.PublicSubnet3, '']
+        PublicALBSecurityGroupId: !GetAtt SecurityGroupsStack.Outputs.PublicALBSecurityGroupId
+        WAFWebACLArn: !GetAtt WAFStack.Outputs.WAFWebACLArn
+        ALBIdleTimeout: !Ref ALBIdleTimeout
+        ACMCertificateArn: !Ref ACMCertificateArn
+        SSLPolicy: !Ref SSLPolicy
+        ALBDeletionProtection: !Ref ALBDeletionProtection
+        ALBHTTP2Enabled: !Ref ALBHTTP2Enabled
+        ALBDropInvalidHeaders: !Ref ALBDropInvalidHeaders
+        ALBAccessLogsEnabled: !Ref ALBAccessLogsEnabled
+        AccessLogsBucketName: !GetAtt S3Stack.Outputs.AccessLogsBucketName
+        ALBListenerPort: !Ref ALBListenerPort
+
+  InternalALBStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/loadbalancer/internal-alb.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        NumberOfAZs: !Ref NumberOfAZs
+        PrivateAppSubnet1: !GetAtt VpcStack.Outputs.PrivateAppSubnet1
+        PrivateAppSubnet2: !GetAtt VpcStack.Outputs.PrivateAppSubnet2
+        PrivateAppSubnet3: !If [Has3AZs, !GetAtt VpcStack.Outputs.PrivateAppSubnet3, '']
+        InternalALBSecurityGroupId: !GetAtt SecurityGroupsStack.Outputs.InternalALBSecurityGroupId
+        InternalALBIdleTimeout: !Ref InternalALBIdleTimeout
+        InternalALBDeletionProtection: !Ref InternalALBDeletionProtection
+        InternalALBHTTP2Enabled: !Ref InternalALBHTTP2Enabled
+        InternalALBDropInvalidHeaders: !Ref InternalALBDropInvalidHeaders
+        InternalALBListenerPort: !Ref InternalALBListenerPort
+
+  # -------------------------------------------------------------
+  # 5. COMPUTE & SERVICES
+  # -------------------------------------------------------------
+  ECSClusterStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/compute/ecs-cluster.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        ContainerInsightsEnabled: !Ref ContainerInsightsEnabled
+
+  LaunchTemplateStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/compute/launch-template.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        InstanceType: !Ref InstanceType
+        ECSInstanceProfileArn: !GetAtt ECSInstanceRoleStack.Outputs.ECSInstanceProfileArn
+        SecurityGroupId: !GetAtt SecurityGroupsStack.Outputs.BackendSecurityGroupId
+        ECSClusterName: !GetAtt ECSClusterStack.Outputs.ECSClusterName
+        EBSVolumeSize: !Ref EBSVolumeSize
+        EBSVolumeType: !Ref EBSVolumeType
+        EBSEncrypted: !Ref EBSEncrypted
+        IMDSHttpTokens: !Ref IMDSHttpTokens
+        DetailedMonitoringEnabled: !Ref DetailedMonitoringEnabled
+        IMDSHttpPutResponseHopLimit: !Ref IMDSHttpPutResponseHopLimit
+
+  AutoScalingStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/compute/autoscaling.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        LaunchTemplateId: !GetAtt LaunchTemplateStack.Outputs.LaunchTemplateId
+        NumberOfAZs: !Ref NumberOfAZs
+        PrivateAppSubnet1: !GetAtt VpcStack.Outputs.PrivateAppSubnet1
+        PrivateAppSubnet2: !GetAtt VpcStack.Outputs.PrivateAppSubnet2
+        PrivateAppSubnet3: !If [Has3AZs, !GetAtt VpcStack.Outputs.PrivateAppSubnet3, '']
+        ECSClusterName: !GetAtt ECSClusterStack.Outputs.ECSClusterName
+        ASGMinSize: !Ref ASGMinSize
+        ASGMaxSize: !Ref ASGMaxSize
+        ASGDesiredCapacity: !Ref ASGDesiredCapacity
+        CapacityProviderTargetCapacity: !Ref CapacityProviderTargetCapacity
+        HealthCheckType: !Ref HealthCheckType
+        HealthCheckGracePeriod: !Ref HealthCheckGracePeriod
+        ManagedTerminationProtection: !Ref ManagedTerminationProtection
+
+  FrontendTaskStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/compute/frontend-task.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        ECSTaskExecutionRoleArn: !GetAtt ECSTaskRoleStack.Outputs.ECSTaskExecutionRoleArn
+        ECSTaskRoleArn: !GetAtt ECSTaskRoleStack.Outputs.ECSTaskRoleArn
+        FrontendRepositoryUri: !GetAtt ECRStack.Outputs.FrontendRepositoryUri
+        FrontendLogGroupName: !GetAtt CloudWatchStack.Outputs.FrontendLogGroupName
+        FrontendImageTag: !Ref FrontendImageTag
+        FrontendCPU: !Ref FrontendCPU
+        FrontendMemory: !Ref FrontendMemory
+        FrontendContainerPort: !Ref FrontendContainerPort
+        FrontendNetworkMode: !Ref FrontendNetworkMode
+        FrontendLogStreamPrefix: !Ref FrontendLogStreamPrefix
+
+  BackendTaskStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/compute/backend-task.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        ECSTaskExecutionRoleArn: !GetAtt ECSTaskRoleStack.Outputs.ECSTaskExecutionRoleArn
+        ECSTaskRoleArn: !GetAtt ECSTaskRoleStack.Outputs.ECSTaskRoleArn
+        BackendRepositoryUri: !GetAtt ECRStack.Outputs.BackendRepositoryUri
+        BackendLogGroupName: !GetAtt CloudWatchStack.Outputs.BackendLogGroupName
+        DatabaseSecretArn: !GetAtt SecretsStack.Outputs.DatabaseSecretArn
+        RDSEndpointAddress: !GetAtt RDSStack.Outputs.RDSEndpointAddress
+        BackendImageTag: !Ref BackendImageTag
+        DatabaseName: !Ref DatabaseName
+        DatabasePort: !Ref DatabasePort
+        BackendCPU: !Ref BackendCPU
+        BackendMemory: !Ref BackendMemory
+        BackendContainerPort: !Ref BackendContainerPort
+        BackendNetworkMode: !Ref BackendNetworkMode
+        BackendLogStreamPrefix: !Ref BackendLogStreamPrefix
+
+  FrontendServiceStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/compute/frontend-service.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        ECSClusterName: !GetAtt ECSClusterStack.Outputs.ECSClusterName
+        FrontendTaskDefinitionArn: !GetAtt FrontendTaskStack.Outputs.FrontendTaskDefinitionArn
+        FrontendTargetGroupArn: !GetAtt TargetGroupsStack.Outputs.FrontendTargetGroupArn
+        NumberOfAZs: !Ref NumberOfAZs
+        PrivateAppSubnet1: !GetAtt VpcStack.Outputs.PrivateAppSubnet1
+        PrivateAppSubnet2: !GetAtt VpcStack.Outputs.PrivateAppSubnet2
+        PrivateAppSubnet3: !If [Has3AZs, !GetAtt VpcStack.Outputs.PrivateAppSubnet3, '']
+        FrontendSecurityGroupId: !GetAtt SecurityGroupsStack.Outputs.FrontendSecurityGroupId
+        PublicALBListener80Arn: !GetAtt PublicALBStack.Outputs.PublicALBListener80Arn
+        FrontendDesiredCount: !Ref FrontendDesiredCount
+        FrontendLaunchType: !Ref FrontendLaunchType
+        FrontendScaleMinCapacity: !Ref FrontendScaleMinCapacity
+        FrontendScaleMaxCapacity: !Ref FrontendScaleMaxCapacity
+        FrontendScaleCpuTarget: !Ref FrontendScaleCpuTarget
+        FrontendMaximumPercent: !Ref FrontendMaximumPercent
+        FrontendMinimumHealthyPercent: !Ref FrontendMinimumHealthyPercent
+        FrontendHealthCheckGracePeriod: !Ref FrontendHealthCheckGracePeriod
+        FrontendScaleInCooldown: !Ref FrontendScaleInCooldown
+        FrontendScaleOutCooldown: !Ref FrontendScaleOutCooldown
+        FrontendListenerRulePriority: !Ref FrontendListenerRulePriority
+        FrontendPathPattern: !Ref FrontendPathPattern
+        FrontendEnableExecuteCommand: !Ref FrontendEnableExecuteCommand
+
+  BackendServiceStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/compute/backend-service.yaml'
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        ECSClusterName: !GetAtt ECSClusterStack.Outputs.ECSClusterName
+        BackendTaskDefinitionArn: !GetAtt BackendTaskStack.Outputs.BackendTaskDefinitionArn
+        BackendTargetGroupArn: !GetAtt TargetGroupsStack.Outputs.BackendTargetGroupArn
+        NumberOfAZs: !Ref NumberOfAZs
+        PrivateAppSubnet1: !GetAtt VpcStack.Outputs.PrivateAppSubnet1
+        PrivateAppSubnet2: !GetAtt VpcStack.Outputs.PrivateAppSubnet2
+        PrivateAppSubnet3: !If [Has3AZs, !GetAtt VpcStack.Outputs.PrivateAppSubnet3, '']
+        BackendSecurityGroupId: !GetAtt SecurityGroupsStack.Outputs.BackendSecurityGroupId
+        InternalALBListener80Arn: !GetAtt InternalALBStack.Outputs.InternalALBListener80Arn
+        BackendDesiredCount: !Ref BackendDesiredCount
+        BackendLaunchType: !Ref BackendLaunchType
+        BackendScaleMinCapacity: !Ref BackendScaleMinCapacity
+        BackendScaleMaxCapacity: !Ref BackendScaleMaxCapacity
+        BackendScaleCpuTarget: !Ref BackendScaleCpuTarget
+        BackendMaximumPercent: !Ref BackendMaximumPercent
+        BackendMinimumHealthyPercent: !Ref BackendMinimumHealthyPercent
+        BackendHealthCheckGracePeriod: !Ref BackendHealthCheckGracePeriod
+        BackendScaleInCooldown: !Ref BackendScaleInCooldown
+        BackendScaleOutCooldown: !Ref BackendScaleOutCooldown
+        BackendListenerRulePriority: !Ref BackendListenerRulePriority
+        BackendPathPattern: !Ref BackendPathPattern
+        BackendEnableExecuteCommand: !Ref BackendEnableExecuteCommand
+
+  # -------------------------------------------------------------
+  # 6. DNS
+  # -------------------------------------------------------------
+  Route53Stack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplatesBucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${TemplatesPrefix}/dns/route53.yaml'
+      Parameters:
+        HostedZoneName: !Ref HostedZoneName
+        ALBDNSName: !GetAtt PublicALBStack.Outputs.PublicALBDNSName
+        ALBHostedZoneId: !GetAtt PublicALBStack.Outputs.PublicALBHostedZoneId
+        AppSubdomain: !Ref AppSubdomain
+
+Outputs:
+  PublicApplicationEndpoint:
+    Description: DNS Name of the Public ALB to access the application
+    Value: !GetAtt PublicALBStack.Outputs.PublicALBDNSName
+  ApplicationDomain:
+    Description: Custom domain name (if configured via Route53)
+    Value: !GetAtt Route53Stack.Outputs.AppDNSName
