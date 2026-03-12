@@ -32,8 +32,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       CORS_ORIGINS: ${CORS_ORIGINS}
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-admin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-password123}
       AWS_REGION: us-east-1
       S3_ENDPOINT: http://s3-minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}

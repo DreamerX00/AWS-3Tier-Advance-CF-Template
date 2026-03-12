@@ -41,7 +41,9 @@ function deriveLayerData(config, response, error, durationMs) {
     const status = response?.status || error?.response?.status || 0;
     const responseData = response?.data || error?.response?.data || {};
     const responseSize = JSON.stringify(responseData).length;
-    const requestSize = JSON.stringify(config?.data || {}).length;
+    let requestSize = config?.__chunkSize !== undefined 
+        ? config.__chunkSize 
+        : (config?.data instanceof FormData ? Number(config?.headers?.['Content-Length'] || 2048) : JSON.stringify(config?.data || {}).length);
     const host = config?.baseURL || window.location.host;
     const port = host.includes(':') ? host.split(':').pop() : '80';
 
@@ -265,6 +267,37 @@ export function OSIMonitorProvider({ children }) {
             config.__osiKey = key;
             pendingRef.current[key] = Date.now();
             setMetrics(prev => ({ ...prev, activeConnections: prev.activeConnections + 1 }));
+
+            // Custom Upload Tracker for Large Files
+            if (config.data instanceof FormData || config.headers?.['Content-Type']?.toString().includes('multipart')) {
+                const originalOnUploadProgress = config.onUploadProgress;
+                let lastLoaded = 0;
+                let lastTime = Date.now();
+
+                config.onUploadProgress = (progressEvent) => {
+                    if (originalOnUploadProgress) originalOnUploadProgress(progressEvent);
+                    
+                    const now = Date.now();
+                    const chunkLoaded = progressEvent.loaded - lastLoaded;
+                
+                    // Fire chunk event every ~250ms if data moved
+                    if (chunkLoaded > 0 && now - lastTime > 250) {
+                        const duration = now - lastTime;
+                        const fakeConfig = { ...config, __chunkSize: chunkLoaded };
+                        const genericEvent = deriveLayerData(fakeConfig, { status: 102, data: {} }, null, duration);
+                        
+                        genericEvent.method = 'UPLOAD'; // Special badge
+                        genericEvent.status = 102; // Processing
+                        genericEvent.alerts = []; // No slow alerts for partial chunks
+                        
+                        addEvent(genericEvent);
+                        
+                        lastLoaded = progressEvent.loaded;
+                        lastTime = now;
+                    }
+                };
+            }
+
             return config;
         });
 
