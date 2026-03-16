@@ -1,0 +1,90 @@
+pipeline {
+    agent { label 'docker-agent' }
+    environment {
+        AWS_REGION = 
+        AWS_ACCOUNT_ID =
+
+        ECR_REPO = "basic_crud/backend"
+        ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+
+        IMAGE_NAME = "backend-image"
+        APP_DIR = "Sample_Application/frontend"
+
+        ECS_CLUSTER = "Sample"
+        ECS_SERVICE = "Sample"
+    }
+
+    stages {
+
+        stage('Cleanup Workspace') {
+            steps {
+                echo "Cleaning workspace..."
+                deleteDir()
+            }
+        }
+
+        stage('Checkout Repository') {
+            steps {
+                git branch: 'main',
+                url: 'https://github.com/DreamerX00/AWS-3Tier-Advance-CF-Template.git'
+            }
+        }
+
+        stage('Login to Amazon ECR') {
+            steps {
+                sh '''
+                aws ecr get-login-password --region $AWS_REGION \
+                | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh '''
+                    echo "Building Docker image..."
+                    docker build -t $IMAGE_NAME .
+                    '''
+                }
+            }
+        }
+
+        stage('Tag Image for ECR') {
+            steps {
+                sh '''
+                docker tag $IMAGE_NAME:latest $ECR_URI:latest
+                '''
+            }
+        }
+
+        stage('Push Image to ECR') {
+            steps {
+                sh '''
+                docker push $ECR_URI:latest
+                '''
+            }
+        }
+
+        stage('Deploy to ECS') {
+            steps {
+                sh '''
+                aws ecs update-service \
+                --cluster $ECS_CLUSTER \
+                --service $ECS_SERVICE \
+                --force-new-deployment \
+                --region $AWS_REGION
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployment completed successfully 🚀"
+        }
+        failure {
+            echo "Pipeline failed ❌"
+        }
+    }
+}
