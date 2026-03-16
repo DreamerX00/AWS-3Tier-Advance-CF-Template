@@ -6,6 +6,7 @@ import com.backend.aws.repository.FileMetadataRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -25,17 +26,18 @@ public class FileService {
     private final FileMetadataRepository repository;
     private final S3Client s3Client;
 
-    private static final String BUCKET_NAME = "aws-practice-storage";
+    @Value("${app.storage.bucket-name:aws-practice-storage}")
+    private String bucketName;
 
     @PostConstruct
     public void initBucket() {
         try {
-            s3Client.headBucket(HeadBucketRequest.builder().bucket(BUCKET_NAME).build());
-            log.info("Bucket {} already exists.", BUCKET_NAME);
+            s3Client.headBucket(HeadBucketRequest.builder().bucket(bucketName).build());
+            log.info("Bucket {} already exists.", bucketName);
         } catch (S3Exception e) {
-            log.info("Creating bucket {}", BUCKET_NAME);
+            log.info("Creating bucket {}", bucketName);
             try {
-                s3Client.createBucket(CreateBucketRequest.builder().bucket(BUCKET_NAME).build());
+                s3Client.createBucket(CreateBucketRequest.builder().bucket(bucketName).build());
             } catch (Exception ex) {
                 log.error("Failed to create bucket: {}", ex.getMessage());
             }
@@ -59,7 +61,7 @@ public class FileService {
         String s3Key = UUID.randomUUID() + "_" + file.getOriginalFilename();
 
         PutObjectRequest putOb = PutObjectRequest.builder()
-                .bucket(BUCKET_NAME)
+                .bucket(bucketName)
                 .key(s3Key)
                 .contentType(file.getContentType())
                 .build();
@@ -83,7 +85,7 @@ public class FileService {
     public byte[] download(String s3Key) {
         try {
             GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                    .bucket(BUCKET_NAME)
+                    .bucket(bucketName)
                     .key(s3Key)
                     .build();
 
@@ -99,7 +101,7 @@ public class FileService {
         
         try {
             DeleteObjectRequest deleteObjectRequest = DeleteObjectRequest.builder()
-                .bucket(BUCKET_NAME)
+                .bucket(bucketName)
                 .key(metadata.getS3Key())
                 .build();
             s3Client.deleteObject(deleteObjectRequest);

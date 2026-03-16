@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
     Box, Card, Typography, Button, IconButton, Tooltip,
     Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-    TextField, Chip, CircularProgress, LinearProgress,
+    TextField, Chip, CircularProgress, Grid, LinearProgress,
 } from '@mui/material';
 import {
     CloudUpload, Delete, Download, Refresh, InsertDriveFile,
@@ -11,7 +11,7 @@ import {
 import { useDropzone } from 'react-dropzone';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import api from '../api/axiosClient';
+import api, { getApiErrorMessages } from '../api/axiosClient';
 
 const MotionRow = motion.create(TableRow);
 
@@ -40,24 +40,29 @@ function formatSize(bytes) {
 
 export default function FileManagerPage() {
     const [files, setFiles] = useState([]);
+    const [summary, setSummary] = useState(null);
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
     const [description, setDescription] = useState('');
 
-    const fetchFiles = async () => {
+    const fetchWorkspace = async () => {
         setLoading(true);
         try {
-            const res = await api.get('/files');
-            setFiles(res.data);
+            const [filesResponse, summaryResponse] = await Promise.all([
+                api.get('/files'),
+                api.get('/storage/summary'),
+            ]);
+            setFiles(filesResponse.data);
+            setSummary(summaryResponse.data);
         } catch (err) {
-            toast.error('Failed to load files');
+            toast.error(getApiErrorMessages(err)[0]);
         } finally {
             setLoading(false);
         }
     };
 
-    useEffect(() => { fetchFiles(); }, []);
+    useEffect(() => { fetchWorkspace(); }, []);
 
     const onDrop = useCallback(async (acceptedFiles) => {
         for (const file of acceptedFiles) {
@@ -77,9 +82,9 @@ export default function FileManagerPage() {
                 });
                 toast.success(`${file.name} uploaded! ☁️`);
                 setDescription('');
-                fetchFiles();
+                fetchWorkspace();
             } catch (err) {
-                toast.error(`Failed to upload ${file.name}`);
+                toast.error(getApiErrorMessages(err)[0] || `Failed to upload ${file.name}`);
             } finally {
                 setUploading(false);
                 setUploadProgress(0);
@@ -93,9 +98,9 @@ export default function FileManagerPage() {
         try {
             await api.delete(`/files/${id}`);
             toast.success(`${name} deleted! 🗑️`);
-            fetchFiles();
+            fetchWorkspace();
         } catch (err) {
-            toast.error('Delete failed');
+            toast.error(getApiErrorMessages(err)[0]);
         }
     };
 
@@ -104,7 +109,10 @@ export default function FileManagerPage() {
         window.open(`${baseUrl}/api/files/download/${s3Key}`, '_blank');
     };
 
-    const totalSize = files.reduce((acc, f) => acc + (f.fileSize || 0), 0);
+    const totalSize = summary?.totalBytes ?? files.reduce((acc, file) => acc + (file.fileSize || 0), 0);
+    const totalFiles = summary?.totalFiles ?? files.length;
+    const recentUploads = summary?.recentUploads?.length ?? 0;
+    const primaryStorage = Object.entries(summary?.storageTypeBreakdown || {})[0]?.[0] || 'S3';
 
     return (
         <Box>
@@ -114,12 +122,42 @@ export default function FileManagerPage() {
                     background: 'linear-gradient(135deg, #8B5CF6, #8B5CF699)',
                     WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
                 }}>
-                    File Manager
+                    Storage Workspace
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                    Upload & manage files — S3 bucket simulation for AWS practice
+                    Object storage operations, upload telemetry, and file metadata in one workspace
                 </Typography>
             </Box>
+
+            <Grid container spacing={2} sx={{ mb: 3 }}>
+                <Grid size={{ xs: 12, md: 4 }}>
+                    <Card sx={{ p: 2.5 }}>
+                        <Typography variant="overline" color="text.secondary">Tracked Objects</Typography>
+                        <Typography variant="h4" sx={{ mt: 0.75, fontWeight: 800 }}>{totalFiles}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Files currently indexed by the storage summary endpoint.
+                        </Typography>
+                    </Card>
+                </Grid>
+                <Grid size={{ xs: 12, md: 4 }}>
+                    <Card sx={{ p: 2.5 }}>
+                        <Typography variant="overline" color="text.secondary">Total Footprint</Typography>
+                        <Typography variant="h4" sx={{ mt: 0.75, fontWeight: 800 }}>{formatSize(totalSize)}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Current logical storage volume across uploaded objects.
+                        </Typography>
+                    </Card>
+                </Grid>
+                <Grid size={{ xs: 12, md: 4 }}>
+                    <Card sx={{ p: 2.5 }}>
+                        <Typography variant="overline" color="text.secondary">Primary Storage</Typography>
+                        <Typography variant="h4" sx={{ mt: 0.75, fontWeight: 800 }}>{primaryStorage}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            {recentUploads} recent uploads are included in the current storage summary.
+                        </Typography>
+                    </Card>
+                </Grid>
+            </Grid>
 
             {/* Upload Zone */}
             <Card sx={{ p: 3, mb: 3 }}>
@@ -176,8 +214,9 @@ export default function FileManagerPage() {
                 />
 
                 <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
-                    <Chip label={`${files.length} files`} size="small" sx={{ bgcolor: 'rgba(139,92,246,0.15)', color: '#8B5CF6', fontWeight: 600 }} />
+                    <Chip label={`${totalFiles} files`} size="small" sx={{ bgcolor: 'rgba(139,92,246,0.15)', color: '#8B5CF6', fontWeight: 600 }} />
                     <Chip label={formatSize(totalSize)} size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+                    <Chip label={`${recentUploads} recent uploads`} size="small" sx={{ bgcolor: 'rgba(56,189,248,0.12)', color: '#7DD3FC' }} />
                 </Box>
             </Card>
 

@@ -18,17 +18,18 @@ FROM nginx:alpine
 RUN rm -rf /usr/share/nginx/html/*
 
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 
-# Non-root nginx
+ENV API_UPSTREAM=http://backend:8080
+
+# Keep the default nginx entrypoint user behavior so the runtime template
+# can be rendered into /etc/nginx/conf.d before the worker drops privileges.
 RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/log/nginx && \
     touch /var/run/nginx.pid && chown nginx:nginx /var/run/nginx.pid
 
-USER nginx
-
-EXPOSE 80
+EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -qO- http://localhost:80/ || exit 1
+  CMD wget -qO- http://localhost:3000/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

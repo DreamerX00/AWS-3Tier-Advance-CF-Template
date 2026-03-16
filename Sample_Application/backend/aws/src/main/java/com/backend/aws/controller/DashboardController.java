@@ -1,6 +1,8 @@
 package com.backend.aws.controller;
 
+import com.backend.aws.dto.SummaryDto;
 import com.backend.aws.repository.*;
+import com.backend.aws.service.SummaryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -25,6 +27,7 @@ public class DashboardController {
     private final FileMetadataRepository fileRepo;
     private final NotificationRepository notificationRepo;
     private final AuditLogRepository auditRepo;
+    private final SummaryService summaryService;
 
     @GetMapping("/stats")
     public ResponseEntity<Map<String, Object>> getStats() {
@@ -49,5 +52,10 @@ public class DashboardController {
         stats.put("status", "HEALTHY");
 
         return ResponseEntity.ok(stats);
+    }
+
+    @GetMapping("/summary")
+    public ResponseEntity<SummaryDto.DashboardSummaryResponse> getSummary() {
+        return ResponseEntity.ok(summaryService.buildDashboardSummary());
     }
 }

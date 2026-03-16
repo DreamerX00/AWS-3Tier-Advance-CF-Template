@@ -1,16 +1,17 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-    Box, Card, Typography, Grid, Chip, CircularProgress,
-    LinearProgress, IconButton, Tooltip,
+    Box, Button, Card, Typography, Grid, Chip, CircularProgress,
+    IconButton, Stack, Tooltip,
 } from '@mui/material';
 import {
     People, School, StickyNote2, TaskAlt, Inventory2, Event,
     CloudUpload, Notifications, ShowChart, Refresh, CheckCircle,
-    TrendingUp,
+    TrendingUp, ArrowOutward, WarningAmber,
 } from '@mui/icons-material';
 import { motion } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Cell, PieChart, Pie, Tooltip as RechartsTooltip } from 'recharts';
-import api from '../api/axiosClient';
+import api, { getApiErrorMessages } from '../api/axiosClient';
 import toast from 'react-hot-toast';
 
 const MotionCard = motion.create(Card);
@@ -27,24 +28,17 @@ const entityConfig = [
 ];
 
 export default function DashboardPage() {
-    const [stats, setStats] = useState(null);
-    const [auditLogs, setAuditLogs] = useState([]);
-    const [healthStatus, setHealthStatus] = useState(null);
+    const navigate = useNavigate();
+    const [summary, setSummary] = useState(null);
     const [loading, setLoading] = useState(true);
 
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [statsRes, auditRes, healthRes] = await Promise.allSettled([
-                api.get('/dashboard/stats'),
-                api.get('/audit'),
-                api.get('/health'),
-            ]);
-            if (statsRes.status === 'fulfilled') setStats(statsRes.value.data);
-            if (auditRes.status === 'fulfilled') setAuditLogs(auditRes.value.data.slice(0, 10));
-            if (healthRes.status === 'fulfilled') setHealthStatus(healthRes.value.data);
+            const response = await api.get('/dashboard/summary');
+            setSummary(response.data);
         } catch (err) {
-            toast.error('Failed to load dashboard');
+            toast.error(getApiErrorMessages(err)[0]);
         } finally {
             setLoading(false);
         }
@@ -60,10 +54,28 @@ export default function DashboardPage() {
         );
     }
 
-    const counts = stats?.counts || {};
+    const counts = summary?.counts || {};
     const chartData = entityConfig.map((e) => ({ name: e.label, count: counts[e.key] || 0, color: e.color }));
     const pieData = chartData.filter((d) => d.count > 0);
-    const totalRecords = Object.values(counts).reduce((a, b) => a + b, 0);
+    const totalRecords = summary?.totalRecords || 0;
+    const activityItems = summary?.activity?.items || [];
+    const attentionItems = [
+        summary?.unreadNotifications
+            ? { label: 'Unread notifications need review', value: summary.unreadNotifications, path: '/operations/notifications', color: '#EC4899' }
+            : null,
+        summary?.storage?.totalFiles
+            ? { label: 'Storage objects currently tracked', value: summary.storage.totalFiles, path: '/storage/files', color: '#A855F7' }
+            : null,
+        summary?.activity?.actionBreakdown?.DELETE
+            ? { label: 'Recent delete operations detected', value: summary.activity.actionBreakdown.DELETE, path: '/activity/audit', color: '#EF4444' }
+            : null,
+    ].filter(Boolean);
+    const quickActions = [
+        { label: 'Review tasks', path: '/operations/tasks', helper: 'Move work forward', color: '#3B82F6' },
+        { label: 'Open storage', path: '/storage/files', helper: 'Inspect uploads and metadata', color: '#A855F7' },
+        { label: 'Audit activity', path: '/activity/audit', helper: 'Trace recent system changes', color: '#F59E0B' },
+        { label: 'System health', path: '/system/health', helper: 'Check stack readiness', color: '#22C55E' },
+    ];
 
     const actionColors = { CREATE: '#10B981', UPDATE: '#3B82F6', PATCH: '#F59E0B', DELETE: '#EF4444' };
 
@@ -76,10 +88,10 @@ export default function DashboardPage() {
                         background: 'linear-gradient(135deg, #6C63FF, #FF6B9D)',
                         WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
                     }}>
-                        Dashboard
+                        Overview
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                        System overview & real-time metrics — CloudWatch ready
+                        Decision-first summary for operations, storage, activity, and system state
                     </Typography>
                 </Box>
                 <Tooltip title="Refresh">
@@ -96,7 +108,7 @@ export default function DashboardPage() {
                             <CheckCircle sx={{ color: '#10B981', fontSize: 40 }} />
                             <Box>
                                 <Typography variant="h5" sx={{ fontWeight: 700, color: '#10B981' }}>
-                                    {healthStatus?.status || 'HEALTHY'}
+                                    {summary?.status || 'UP'}
                                 </Typography>
                                 <Typography variant="caption" color="text.secondary">System Status</Typography>
                             </Box>
@@ -124,12 +136,101 @@ export default function DashboardPage() {
                             <Notifications sx={{ color: '#EC4899', fontSize: 40 }} />
                             <Box>
                                 <Typography variant="h5" sx={{ fontWeight: 700, color: '#EC4899' }}>
-                                    {stats?.unreadNotifications || 0}
+                                    {summary?.unreadNotifications || 0}
                                 </Typography>
                                 <Typography variant="caption" color="text.secondary">Unread Notifications</Typography>
                             </Box>
                         </Box>
                     </MotionCard>
+                </Grid>
+            </Grid>
+
+            <Grid container spacing={2} sx={{ mb: 3 }}>
+                <Grid size={{ xs: 12, lg: 7 }}>
+                    <Card sx={{ p: 3, height: '100%' }}>
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+                            <Box>
+                                <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                                    Quick Actions
+                                </Typography>
+                                <Typography variant="body2" color="text.secondary">
+                                    Jump directly into the most important operational workspaces.
+                                </Typography>
+                            </Box>
+                        </Stack>
+                        <Grid container spacing={1.5}>
+                            {quickActions.map((action) => (
+                                <Grid key={action.path} size={{ xs: 12, sm: 6 }}>
+                                    <Card
+                                        sx={{
+                                            p: 2,
+                                            cursor: 'pointer',
+                                            border: `1px solid ${action.color}33`,
+                                            background: `linear-gradient(135deg, ${action.color}1A, rgba(15,23,42,0.72))`,
+                                        }}
+                                        onClick={() => navigate(action.path)}
+                                    >
+                                        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
+                                            <Box>
+                                                <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                                                    {action.label}
+                                                </Typography>
+                                                <Typography variant="body2" color="text.secondary">
+                                                    {action.helper}
+                                                </Typography>
+                                            </Box>
+                                            <ArrowOutward sx={{ color: action.color }} />
+                                        </Stack>
+                                    </Card>
+                                </Grid>
+                            ))}
+                        </Grid>
+                    </Card>
+                </Grid>
+                <Grid size={{ xs: 12, lg: 5 }}>
+                    <Card sx={{ p: 3, height: '100%' }}>
+                        <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 2 }}>
+                            <WarningAmber sx={{ color: '#F59E0B' }} />
+                            <Box>
+                                <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                                    Attention Queue
+                                </Typography>
+                                <Typography variant="body2" color="text.secondary">
+                                    Signals worth checking before they turn into issues.
+                                </Typography>
+                            </Box>
+                        </Stack>
+                        {attentionItems.length === 0 ? (
+                            <Typography variant="body2" color="text.secondary">
+                                No immediate attention signals from the current summary window.
+                            </Typography>
+                        ) : (
+                            <Stack spacing={1.25}>
+                                {attentionItems.map((item) => (
+                                    <Box
+                                        key={item.label}
+                                        onClick={() => navigate(item.path)}
+                                        sx={{
+                                            p: 1.5,
+                                            borderRadius: 2,
+                                            cursor: 'pointer',
+                                            border: `1px solid ${item.color}33`,
+                                            bgcolor: `${item.color}12`,
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            gap: 2,
+                                        }}
+                                    >
+                                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                            {item.label}
+                                        </Typography>
+                                        <Chip label={item.value} size="small" sx={{ bgcolor: `${item.color}22`, color: item.color }} />
+                                    </Box>
+                                ))}
+                            </Stack>
+                        )}
+                    </Card>
                 </Grid>
             </Grid>
 
@@ -214,13 +315,13 @@ export default function DashboardPage() {
                     <ShowChart sx={{ mr: 1, verticalAlign: 'middle', fontSize: 20 }} />
                     Recent Activity
                 </Typography>
-                {auditLogs.length === 0 ? (
+                {activityItems.length === 0 ? (
                     <Typography color="text.secondary" variant="body2">
                         No activity yet — create some records to see the audit log here
                     </Typography>
                 ) : (
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                        {auditLogs.map((log, i) => (
+                        {activityItems.map((log, i) => (
                             <motion.div key={log.id || i} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}>
                                 <Box sx={{
                                     display: 'flex', alignItems: 'center', gap: 2, p: 1.5,

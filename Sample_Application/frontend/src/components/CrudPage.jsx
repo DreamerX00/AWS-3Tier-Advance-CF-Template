@@ -13,7 +13,7 @@ import {
 } from '@mui/icons-material';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
-import api from '../api/axiosClient';
+import api, { getApiErrorMessages } from '../api/axiosClient';
 
 const MotionRow = motion.create(TableRow);
 
@@ -44,7 +44,7 @@ export default function CrudPage({
             const res = await api.get(`/${endpoint}`, { params });
             setData(res.data);
         } catch (err) {
-            toast.error('Failed to fetch data');
+            toast.error(getApiErrorMessages(err)[0]);
         } finally {
             setLoading(false);
         }
@@ -60,7 +60,7 @@ export default function CrudPage({
             const res = await api.get(`/${endpoint}/search`, { params: { q: searchQuery } });
             setData(res.data);
         } catch (err) {
-            toast.error('Search failed');
+            toast.error(getApiErrorMessages(err)[0]);
         } finally {
             setLoading(false);
         }
@@ -108,7 +108,7 @@ export default function CrudPage({
             if (errors) {
                 Object.values(errors).forEach((msg) => toast.error(msg));
             } else {
-                toast.error(err.response?.data?.message || 'Operation failed');
+                toast.error(getApiErrorMessages(err)[0]);
             }
         }
     };
@@ -120,7 +120,7 @@ export default function CrudPage({
             setDeleteDialogOpen(false);
             fetchData();
         } catch (err) {
-            toast.error('Delete failed');
+            toast.error(getApiErrorMessages(err)[0]);
         }
     };
 
@@ -130,7 +130,7 @@ export default function CrudPage({
             toast.success('Updated!');
             fetchData();
         } catch (err) {
-            toast.error('Patch failed');
+            toast.error(getApiErrorMessages(err)[0]);
         }
     };
 

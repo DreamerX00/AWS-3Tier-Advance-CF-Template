@@ -13,11 +13,25 @@ import TopologyView from './osi/TopologyView';
 import AlertsView from './osi/AlertsView';
 
 export default function OSIMonitorPane() {
-    const { events, metrics, isPaused, isOpen, setIsOpen, togglePause, clearLog, exportLog } = useOSIMonitor();
+    const {
+        events,
+        metrics,
+        isPaused,
+        isOpen,
+        setIsOpen,
+        togglePause,
+        clearLog,
+        exportLog,
+        systemSummary,
+        systemAlerts,
+        componentStatuses,
+    } = useOSIMonitor();
     const [activeTab, setActiveTab] = useState('layers');
     const [methodFilter, setMethodFilter] = useState('ALL');
 
     const latestEvent = events[0];
+    const allAlerts = [...systemAlerts, ...metrics.alerts];
+    const unhealthyCount = Object.values(componentStatuses || {}).filter((status) => status === 'DOWN' || status === 'DEGRADED').length;
 
     const tabs = [
         { id: 'layers', label: 'Layers', icon: '📡' },
@@ -26,7 +40,7 @@ export default function OSIMonitorPane() {
         { id: 'topology', label: 'Topology', icon: '🗺️' },
         { id: 'packets', label: 'Audit', icon: '📝' },
         { id: 'metrics', label: 'Metrics', icon: '📈' },
-        { id: 'alerts', label: `Alerts ${metrics.alerts.length ? '🛑' : ''}`, icon: '🚨' },
+        { id: 'alerts', label: `Alerts ${allAlerts.length ? '🛑' : ''}`, icon: '🚨' },
     ];
 
     return (
@@ -39,13 +53,13 @@ export default function OSIMonitorPane() {
                 style={{
                     position: 'fixed', bottom: 20, zIndex: 9999,
                     width: 48, height: 48, borderRadius: 24,
-                    background: metrics.alerts.length > 0 ? '#EF4444' : isOpen ? '#1E293B' : '#6C63FF',
+                    background: allAlerts.length > 0 ? '#EF4444' : isOpen ? '#1E293B' : '#6C63FF',
                     color: 'white', border: '2px solid rgba(255,255,255,0.1)', cursor: 'pointer',
                     boxShadow: '0 4px 20px rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 20, transition: 'background 0.3s'
                 }}
             >
-                {isOpen ? '✕' : metrics.alerts.length > 0 ? '🚨' : '📡'}
+                {isOpen ? '✕' : allAlerts.length > 0 ? '🚨' : '📡'}
                 {!isOpen && latestEvent && (
                     <motion.div initial={{ scale: 0 }} animate={{ scale: [1, 1.5, 0], opacity: [1, 0] }} transition={{ duration: 0.8 }}
                         style={{ position: 'absolute', inset: -4, borderRadius: '50%', border: '2px solid #6C63FF' }} />
@@ -74,10 +88,10 @@ export default function OSIMonitorPane() {
                                 <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, background: 'linear-gradient(to right, #6C63FF, #06B6D4)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '0.05em' }}>
                                     NEXUS OSI CORE
                                 </h2>
-                                <div style={{ fontSize: 10, color: '#64748B', fontFamily: 'monospace', marginTop: 2 }}>
-                                    {isPaused ? '⏸ CAPTURE PAUSED' : '▶ LIVE CAPTURE ACTIVE'}
-                                </div>
+                            <div style={{ fontSize: 10, color: '#64748B', fontFamily: 'monospace', marginTop: 2 }}>
+                                    {isPaused ? '⏸ CAPTURE PAUSED' : '▶ LIVE REQUEST CAPTURE'}
                             </div>
+                        </div>
                             <div style={{ display: 'flex', gap: 8 }}>
                                 <button onClick={togglePause} title="Pause/Resume Capture" style={{ width: 28, height: 28, borderRadius: 6, background: 'rgba(255,255,255,0.05)', border: 'none', color: '#CBD5E1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                     {isPaused ? '▶' : '⏸'}
@@ -91,7 +105,7 @@ export default function OSIMonitorPane() {
                         <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
                             <KpiCard label="Requests" value={metrics.totalRequests} sub={`${metrics.errorRate}% ERR`} color="#6C63FF" />
                             <KpiCard label="Avg Latency" value={`${metrics.avgLatency}ms`} sub={`P99 ${metrics.p99}ms`} color="#10B981" />
-                            <KpiCard label="Bandwidth" value={`${(metrics.totalBytesIn / 1024).toFixed(1)}k`} sub="INBOUND KB" color="#F59E0B" />
+                            <KpiCard label="Dependencies" value={systemSummary?.status || 'UNKNOWN'} sub={`${unhealthyCount} unhealthy`} color="#F59E0B" />
                         </div>
 
                         {/* Tabs */}
@@ -127,10 +141,16 @@ export default function OSIMonitorPane() {
                                     {activeTab === 'layers' && <LayerStack latestEvent={latestEvent} />}
                                     {activeTab === 'flow' && <PacketFlowVisualizer latestEvent={latestEvent} />}
                                     {activeTab === 'waterfall' && <WaterfallView events={events} />}
-                                    {activeTab === 'topology' && <TopologyView latestEvent={latestEvent} />}
+                                    {activeTab === 'topology' && (
+                                        <TopologyView
+                                            latestEvent={latestEvent}
+                                            systemSummary={systemSummary}
+                                            componentStatuses={componentStatuses}
+                                        />
+                                    )}
                                     {activeTab === 'packets' && <PacketFeed events={events} methodFilter={methodFilter} setMethodFilter={setMethodFilter} />}
                                     {activeTab === 'metrics' && <MetricsCharts metrics={metrics} />}
-                                    {activeTab === 'alerts' && <AlertsView alerts={metrics.alerts} />}
+                                    {activeTab === 'alerts' && <AlertsView alerts={allAlerts} />}
                                 </motion.div>
                             </AnimatePresence>
                         </div>

@@ -15,6 +15,8 @@ export default function AlertsView({ alerts }) {
         ERROR_5XX: '#EF4444',
         ERROR_4XX: '#FF6B9D',
         RETRANSMIT: '#8B5CF6',
+        SYSTEM_DOWN: '#EF4444',
+        SYSTEM_DEGRADED: '#F59E0B',
     };
 
     return (

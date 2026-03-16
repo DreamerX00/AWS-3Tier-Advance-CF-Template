@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import {
-    Box, Card, Typography, Chip, CircularProgress, FormControl,
-    InputLabel, Select, MenuItem, IconButton, Tooltip,
+    Box, Button, Card, Chip, CircularProgress, FormControl,
+    Grid, IconButton, InputLabel, MenuItem, Select, Tooltip, Typography,
 } from '@mui/material';
-import { Refresh, History } from '@mui/icons-material';
+import { IosShare, Refresh, History } from '@mui/icons-material';
 import { motion } from 'framer-motion';
-import api from '../api/axiosClient';
+import { useNavigate } from 'react-router-dom';
+import api, { getApiErrorMessages } from '../api/axiosClient';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -26,7 +27,9 @@ const entityColors = {
 };
 
 export default function AuditLogPage() {
+    const navigate = useNavigate();
     const [logs, setLogs] = useState([]);
+    const [summary, setSummary] = useState(null);
     const [loading, setLoading] = useState(true);
     const [entityFilter, setEntityFilter] = useState('');
     const [actionFilter, setActionFilter] = useState('');
@@ -37,10 +40,14 @@ export default function AuditLogPage() {
             const params = {};
             if (entityFilter) params.entityType = entityFilter;
             if (actionFilter) params.action = actionFilter;
-            const res = await api.get('/audit', { params });
-            setLogs(res.data);
+            const [summaryResponse, logsResponse] = await Promise.all([
+                api.get('/activity/recent'),
+                api.get('/audit', { params }),
+            ]);
+            setSummary(summaryResponse.data);
+            setLogs(logsResponse.data);
         } catch (err) {
-            toast.error('Failed to load audit logs');
+            toast.error(getApiErrorMessages(err)[0]);
         } finally {
             setLoading(false);
         }
@@ -48,20 +55,80 @@ export default function AuditLogPage() {
 
     useEffect(() => { fetchLogs(); }, [entityFilter, actionFilter]);
 
+    const actionBreakdown = summary?.actionBreakdown || {};
+    const topActor = summary?.items?.find((item) => item.performedBy)?.performedBy || 'system';
+
     return (
         <Box>
             {/* Header */}
-            <Box sx={{ mb: 3 }}>
-                <Typography variant="h4" sx={{
-                    background: 'linear-gradient(135deg, #F97316, #F9731699)',
-                    WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-                }}>
-                    Audit Log
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                    Activity trail — CloudWatch Logs simulation for all CRUD operations
-                </Typography>
+            <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+                <Box>
+                    <Typography variant="h4" sx={{
+                        background: 'linear-gradient(135deg, #F97316, #F9731699)',
+                        WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+                    }}>
+                        Activity Audit
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                        Trace every data mutation, follow recent operational flow, and pivot into exports when needed.
+                    </Typography>
+                </Box>
+                <Button
+                    variant="contained"
+                    startIcon={<IosShare />}
+                    onClick={() => navigate('/activity/exports')}
+                    sx={{ background: 'linear-gradient(135deg, #F97316 0%, #EA580C 100%)' }}
+                >
+                    Open Exports
+                </Button>
             </Box>
+
+            <Grid container spacing={2} sx={{ mb: 3 }}>
+                <Grid size={{ xs: 12, md: 3 }}>
+                    <Card sx={{ p: 2.5 }}>
+                        <Typography variant="overline" color="text.secondary">Recent Activity</Typography>
+                        <Typography variant="h4" sx={{ mt: 0.75, fontWeight: 800 }}>
+                            {summary?.total || 0}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Events currently surfaced by the V2 activity summary endpoint.
+                        </Typography>
+                    </Card>
+                </Grid>
+                <Grid size={{ xs: 12, md: 3 }}>
+                    <Card sx={{ p: 2.5 }}>
+                        <Typography variant="overline" color="text.secondary">Creates</Typography>
+                        <Typography variant="h4" sx={{ mt: 0.75, fontWeight: 800 }}>
+                            {actionBreakdown.CREATE || 0}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            New records created across tracked domains.
+                        </Typography>
+                    </Card>
+                </Grid>
+                <Grid size={{ xs: 12, md: 3 }}>
+                    <Card sx={{ p: 2.5 }}>
+                        <Typography variant="overline" color="text.secondary">Mutations</Typography>
+                        <Typography variant="h4" sx={{ mt: 0.75, fontWeight: 800 }}>
+                            {(actionBreakdown.UPDATE || 0) + (actionBreakdown.PATCH || 0)}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Updates and patches in the recent activity window.
+                        </Typography>
+                    </Card>
+                </Grid>
+                <Grid size={{ xs: 12, md: 3 }}>
+                    <Card sx={{ p: 2.5 }}>
+                        <Typography variant="overline" color="text.secondary">Primary Actor</Typography>
+                        <Typography variant="h4" sx={{ mt: 0.75, fontWeight: 800, textTransform: 'capitalize' }}>
+                            {topActor}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Most visible actor in the current activity stream.
+                        </Typography>
+                    </Card>
+                </Grid>
+            </Grid>
 
             {/* Filters */}
             <Card sx={{ p: 2, mb: 3 }}>
@@ -148,10 +215,17 @@ export default function AuditLogPage() {
                                         <Box sx={{ flex: 1 }}>
                                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
                                                 <Typography variant="body2" sx={{ fontSize: '1rem' }}>{ac.icon}</Typography>
-                                                <Chip label={log.action} size="small"
+                                <Chip label={log.action} size="small"
                                                     sx={{ bgcolor: ac.bg, color: ac.color, fontWeight: 600, fontSize: '0.7rem' }} />
                                                 <Chip label={log.entityType} size="small" variant="outlined"
                                                     sx={{ borderColor: `${ec}44`, color: ec, fontSize: '0.7rem' }} />
+                                                {log.performedBy && (
+                                                    <Chip
+                                                        label={log.performedBy}
+                                                        size="small"
+                                                        sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: '#CBD5E1', fontSize: '0.68rem' }}
+                                                    />
+                                                )}
                                                 {log.entityId && (
                                                     <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
                                                         #{log.entityId}

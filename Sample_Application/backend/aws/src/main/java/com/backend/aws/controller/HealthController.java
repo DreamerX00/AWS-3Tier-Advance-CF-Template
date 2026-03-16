@@ -1,23 +1,30 @@
 package com.backend.aws.controller;
 
+import com.backend.aws.dto.SummaryDto;
+import com.backend.aws.service.SummaryService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.time.LocalDateTime;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api")
+@RequiredArgsConstructor
 public class HealthController {
+
+    private final SummaryService summaryService;
 
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> health() {
+        SummaryDto.SystemSummaryResponse summary = summaryService.buildSystemSummary();
         return ResponseEntity.ok(Map.of(
-                "status", "UP",
-                "timestamp", LocalDateTime.now().toString(),
-                "service", "AWS Practice Backend"
+                "status", summary.status(),
+                "timestamp", summary.generatedAt().toString(),
+                "service", summary.service(),
+                "components", summary.components()
         ));
     }
 }

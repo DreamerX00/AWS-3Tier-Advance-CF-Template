@@ -36,6 +36,8 @@ services:
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-password123}
       AWS_REGION: us-east-1
       S3_ENDPOINT: http://s3-minio:9000
+      S3_PATH_STYLE: "true"
+      STORAGE_BUCKET_NAME: ${STORAGE_BUCKET_NAME:-aws-practice-storage}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-password123}
     ports:
@@ -73,8 +75,10 @@ services:
         VITE_API_URL: ""
     container_name: aws-practice-frontend
     restart: unless-stopped
+    environment:
+      API_UPSTREAM: http://backend:8080
     ports:
-      - "3000:80"
+      - "3000:3000"
     depends_on:
       - backend
 
