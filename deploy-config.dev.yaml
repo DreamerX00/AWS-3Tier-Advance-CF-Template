@@ -1,0 +1,75 @@
+# =============================================================
+# 3-Tier CloudFormation Deployment Config — DEV Environment
+# =============================================================
+# Usage:
+#   python3 automate_deployment.py --config deploy-config.dev.yaml
+#   python3 automate_deployment.py --config deploy-config.dev.yaml --dry-run
+#   python3 automate_deployment.py --config deploy-config.dev.yaml --delete
+# =============================================================
+
+stack_name: three-tier-dev
+region: us-east-1
+
+# --- S3 Template Source ---
+s3_bucket: 3-tier-advanced-template
+s3_prefix: 3-tier-advanced-template
+
+# --- IAM Role for CloudFormation (optional, comment out to use caller identity) ---
+role_arn: arn:aws:iam::154370341959:role/CloudFormationFullAdminRole
+
+# --- AWS CLI profile (optional, comment out to use default/env creds) ---
+# profile: my-sso-profile
+
+# --- Sync local templates to S3 before deploying ---
+sync_templates: true
+
+# --- CloudFormation capabilities ---
+capabilities:
+  - CAPABILITY_NAMED_IAM
+
+# --- Tags applied to the stack ---
+tags:
+  Project: 3-Tier-Architecture
+  Environment: dev
+  ManagedBy: automate_deployment.py
+
+# =============================================================
+# PARAMETER OVERRIDES
+# Only specify parameters you want to change from root.yaml defaults.
+# All 100+ parameters from root.yaml are supported — just add the key.
+# =============================================================
+parameters:
+  # --- Required ---
+  EnvironmentName: dev
+  TemplatesBucketName: 3-tier-advanced-template
+  TemplatesPrefix: 3-tier-advanced-template
+
+  # --- Cost savings for dev ---
+  NumberOfAZs: "2"
+  MultiAZ: "false"
+  DBDeletionProtection: "false"
+  ALBDeletionProtection: "false"
+  InternalALBDeletionProtection: "false"
+
+  # --- Smaller instances ---
+  InstanceType: t3.micro
+  DBInstanceClass: db.t3.micro
+  DBAllocatedStorage: "20"
+
+  # --- Fewer replicas ---
+  ASGMinSize: "1"
+  ASGMaxSize: "3"
+  ASGDesiredCapacity: "1"
+  FrontendDesiredCount: "1"
+  FrontendScaleMinCapacity: "1"
+  FrontendScaleMaxCapacity: "3"
+  BackendDesiredCount: "1"
+  BackendScaleMinCapacity: "1"
+  BackendScaleMaxCapacity: "3"
+
+  # --- Disable expensive features in dev ---
+  ContainerInsightsEnabled: disabled
+  EnablePerformanceInsights: "false"
+  MonitoringInterval: "0"
+  IsMultiRegionTrail: "false"
+  ALBAccessLogsEnabled: "false"

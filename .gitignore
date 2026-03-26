@@ -1,7 +1,8 @@
 # Ignore all markdown files
 *.md
 **/*.md
-
+.venv/*
+./sample_playwright_and_tkinter/*
 # Except the root README
 !README.md
 !GETTING_STARTED.md

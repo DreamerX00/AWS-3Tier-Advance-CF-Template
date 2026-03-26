@@ -1,0 +1,90 @@
+pipeline {
+    agent { label 'docker-agent' }
+    environment {
+        GCP_PROJECT_ID = ''
+        GCP_REGION = ''
+
+        AR_REPO = 'gcp-practice-repo'
+        AR_HOSTNAME = "${GCP_REGION}-docker.pkg.dev"
+        AR_URI = "${AR_HOSTNAME}/${GCP_PROJECT_ID}/${AR_REPO}"
+
+        IMAGE_NAME = "gcp-practice-frontend"
+        APP_DIR = "Sample_Application/frontend"
+
+        CLOUD_RUN_SERVICE = "gcp-practice-frontend"
+    }
+
+    stages {
+
+        stage('Cleanup Workspace') {
+            steps {
+                echo "Cleaning workspace..."
+                deleteDir()
+            }
+        }
+
+        stage('Checkout Repository') {
+            steps {
+                git branch: 'main',
+                url: 'https://github.com/DreamerX00/AWS-3Tier-Advance-CF-Template.git'
+            }
+        }
+
+        stage('Authenticate to Artifact Registry') {
+            steps {
+                sh '''
+                gcloud auth configure-docker $AR_HOSTNAME --quiet
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh '''
+                    echo "Building Docker image..."
+                    docker build -t $IMAGE_NAME .
+                    '''
+                }
+            }
+        }
+
+        stage('Tag Image for Artifact Registry') {
+            steps {
+                sh '''
+                docker tag $IMAGE_NAME:latest $AR_URI/$IMAGE_NAME:latest
+                '''
+            }
+        }
+
+        stage('Push Image to Artifact Registry') {
+            steps {
+                sh '''
+                docker push $AR_URI/$IMAGE_NAME:latest
+                '''
+            }
+        }
+
+        stage('Deploy to Cloud Run') {
+            steps {
+                sh '''
+                gcloud run deploy $CLOUD_RUN_SERVICE \
+                --image $AR_URI/$IMAGE_NAME:latest \
+                --region $GCP_REGION \
+                --platform managed \
+                --port 3000 \
+                --allow-unauthenticated
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployment completed successfully 🚀"
+        }
+        failure {
+            echo "Pipeline failed ❌"
+        }
+    }
+}

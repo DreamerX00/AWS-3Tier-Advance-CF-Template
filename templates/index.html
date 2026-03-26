@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWS CloudFormation Deployer</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Icons -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+    <!-- CSS -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+    <div class="app-layout">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="brand">
+                <span class="material-icons-round brand-icon">cloud</span>
+                <span class="brand-text">CloudFormation</span>
+                <span class="brand-badge">Deployer</span>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-title">CONFIGURATION</div>
+                <div id="nav-menu" class="nav-links">
+                    <!-- Nav tabs injected here -->
+                </div>
+            </div>
+
+            <div class="nav-section">
+                <div class="nav-title">ACTIONS</div>
+                <div class="nav-links">
+                    <button class="nav-btn" onclick="openDeploy()">
+                        <span class="material-icons-round">rocket_launch</span> Deploy
+                    </button>
+                    <button class="nav-btn" onclick="openPreflight()">
+                        <span class="material-icons-round">checklist</span> Pre-flight Check
+                    </button>
+                </div>
+            </div>
+            
+            <div class="sidebar-spacer"></div>
+            <div class="sidebar-footer">
+                v2.0
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header bar -->
+            <header class="top-header">
+                <div class="search-container">
+                    <span class="material-icons-round">search</span>
+                    <input type="text" id="param-search" placeholder="Search configuration parameters... (Ctrl+K)">
+                </div>
+                <div class="header-actions">
+                    <button class="icon-btn" title="Refresh Config"><span class="material-icons-round">refresh</span></button>
+                    <button class="icon-btn" title="Save Profile"><span class="material-icons-round">save</span></button>
+                </div>
+            </header>
+
+            <!-- Scrollable Content Area -->
+            <div class="scroll-wrapper" id="page-container">
+                <!-- Pages injected here -->
+            </div>
+            
+            <!-- Deploy/Terminal Page (hidden by default) -->
+            <div class="scroll-wrapper terminal-page glass-panel" id="deploy-container" style="display: none;">
+                <div class="page-header">
+                    <span class="material-icons-round page-icon">rocket_launch</span>
+                    <div class="page-title-group">
+                        <h1 class="page-title">Deployment Console</h1>
+                        <p class="page-desc">Execute CloudFormation stacks and monitor progress.</p>
+                    </div>
+                </div>
+                
+                <div class="deploy-controls">
+                    <button class="btn btn-primary" onclick="startAction('deploy')">
+                        <span class="material-icons-round">cloud_upload</span> Execute Deployment
+                    </button>
+                    <button class="btn btn-secondary" onclick="startAction('preflight')">
+                        <span class="material-icons-round">fact_check</span> Run Dry-run
+                    </button>
+                    <button class="btn btn-danger" onclick="startAction('delete')">
+                        <span class="material-icons-round">delete_forever</span> Destroy Stack
+                    </button>
+                </div>
+                
+                <div class="terminal-window">
+                    <div class="terminal-header">
+                        <div class="mac-btns">
+                            <div class="mac-btn red"></div>
+                            <div class="mac-btn yellow"></div>
+                            <div class="mac-btn green"></div>
+                        </div>
+                        <div class="terminal-title">automation_logs.sh</div>
+                    </div>
+                    <div class="terminal-body" id="log-output">
+                        > Ready to deploy...
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Snackbar Container -->
+    <div id="snackbar-container" class="snackbar-container"></div>
+
+    <!-- Scripts -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -144,6 +144,7 @@ Parameters:
 
 Conditions:
   EnableEnhancedMonitoring: !Not [!Equals [!Ref MonitoringInterval, 0]]
+  IsPerformanceInsightsEnabled: !Equals [!Ref EnablePerformanceInsights, 'true']
   IsMySQL: !Equals [!Ref DBEngine, 'mysql']
   IsMariaDB: !Equals [!Ref DBEngine, 'mariadb']
   IsMySQLOrMariaDB: !Or
@@ -200,7 +201,7 @@ Resources:
         - - postgresql
           - upgrade
       EnablePerformanceInsights: !Ref EnablePerformanceInsights
-      PerformanceInsightsRetentionPeriod: !Ref PerformanceInsightsRetentionPeriod
+      PerformanceInsightsRetentionPeriod: !If [IsPerformanceInsightsEnabled, !Ref PerformanceInsightsRetentionPeriod, !Ref "AWS::NoValue"]
       MonitoringInterval: !Ref MonitoringInterval
       MonitoringRoleArn: !If
         - EnableEnhancedMonitoring

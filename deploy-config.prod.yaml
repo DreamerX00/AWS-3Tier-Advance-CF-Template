@@ -1,0 +1,63 @@
+# =============================================================
+# 3-Tier CloudFormation Deployment Config — PROD Environment
+# =============================================================
+# Usage:
+#   python3 automate_deployment.py --config deploy-config.prod.yaml --dry-run
+#   python3 automate_deployment.py --config deploy-config.prod.yaml
+# =============================================================
+
+stack_name: three-tier-prod
+region: us-east-1
+
+s3_bucket: 3-tier-advanced-template
+s3_prefix: 3-tier-advanced-template
+
+role_arn: arn:aws:iam::154370341959:role/CloudFormationFullAdminRole
+
+sync_templates: true
+
+capabilities:
+  - CAPABILITY_NAMED_IAM
+
+tags:
+  Project: 3-Tier-Architecture
+  Environment: prod
+  ManagedBy: automate_deployment.py
+
+parameters:
+  # --- Required ---
+  EnvironmentName: prod
+  TemplatesBucketName: 3-tier-advanced-template
+  TemplatesPrefix: 3-tier-advanced-template
+
+  # --- Production HA ---
+  NumberOfAZs: "3"
+  MultiAZ: "true"
+  DBDeletionProtection: "true"
+  ALBDeletionProtection: "true"
+  InternalALBDeletionProtection: "true"
+
+  # --- Sized for production ---
+  InstanceType: t3.medium
+  DBInstanceClass: db.t3.small
+  DBAllocatedStorage: "50"
+  MaxAllocatedStorage: "200"
+
+  # --- HA replicas ---
+  ASGMinSize: "2"
+  ASGMaxSize: "6"
+  ASGDesiredCapacity: "3"
+  FrontendDesiredCount: "2"
+  FrontendScaleMinCapacity: "2"
+  FrontendScaleMaxCapacity: "6"
+  BackendDesiredCount: "2"
+  BackendScaleMinCapacity: "2"
+  BackendScaleMaxCapacity: "6"
+
+  # --- Full observability ---
+  ContainerInsightsEnabled: enabled
+  EnablePerformanceInsights: "true"
+  MonitoringInterval: "60"
+  IsMultiRegionTrail: "true"
+  LogRetentionDays: "90"
+  DBBackupRetentionPeriod: "14"

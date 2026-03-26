@@ -1,0 +1,396 @@
+import os
+import sys
+import tkinter as tk
+from tkinter import ttk, messagebox
+import boto3
+import json
+import time
+import hashlib
+import sqlite3
+import shutil
+import tempfile
+import secretstorage
+import re
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from playwright.sync_api import sync_playwright
+
+# Domains whose cookies are needed for AWS SSO + Console session
+AWS_COOKIE_DOMAINS = [
+    "aws",
+    "app.aws",
+    "awsapps.com",
+    "amazonaws.com",
+]
+
+# Cyberpunk-themed Colors (Cyberpunk v2 - High Contrast)
+BG_DARK = "#050510"
+BG_PANEL = "#0d0d24"
+CYAN = "#00ffff"
+GREEN = "#00ff41"
+MAGENTA = "#ff00ff"
+DIM = "#444466"
+WHITE = "#e0e0ff"
+BORDER = "#1a1a40"
+
+def get_chrome_encryption_key():
+    """Retrieve Chrome's encryption password from GNOME Keyring."""
+    try:
+        bus = secretstorage.dbus_init()
+        collection = secretstorage.get_default_collection(bus)
+        if collection.is_locked():
+            collection.unlock()
+        for item in collection.get_all_items():
+            attrs = item.get_attributes()
+            if (attrs.get("xdg:schema") == "chrome_libsecret_os_crypt_password_v2"
+                    and attrs.get("application") == "chrome"):
+                return item.get_secret()
+    except Exception as e:
+        print(f"SecretStorage error: {e}")
+    return b"peanuts"
+
+def decrypt_cookie_value(encrypted_value, aes_key, meta_version):
+    """Decrypt a single Chrome cookie value."""
+    if not encrypted_value or encrypted_value[:3] not in (b"v10", b"v11"):
+        return encrypted_value.decode("utf-8", errors="replace") if encrypted_value else ""
+
+    data = encrypted_value[3:]
+    iv = b" " * 16
+    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    decrypted = decryptor.update(data) + decryptor.finalize()
+
+    pad = decrypted[-1]
+    if isinstance(pad, int) and 1 <= pad <= 16:
+        decrypted = decrypted[:-pad]
+
+    if meta_version >= 24 and len(decrypted) > 32:
+        decrypted = decrypted[32:]
+
+    return decrypted.decode("utf-8", errors="replace")
+
+def extract_chrome_cookies():
+    """Extract and decrypt all AWS-related cookies from the running Chrome profile."""
+    password = get_chrome_encryption_key()
+    aes_key = hashlib.pbkdf2_hmac("sha1", password, b"saltysalt", 1, dklen=16)
+
+    cookie_db = os.path.expanduser("~/.config/google-chrome/Default/Cookies")
+    if not os.path.exists(cookie_db):
+        return []
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    shutil.copy2(cookie_db, tmp.name)
+
+    try:
+        conn = sqlite3.connect(tmp.name)
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM meta WHERE key='version'")
+        meta_version = int(cur.fetchone()[0])
+
+        conditions = " OR ".join(["host_key LIKE ?"] * len(AWS_COOKIE_DOMAINS))
+        params = [f"%{d}%" for d in AWS_COOKIE_DOMAINS]
+
+        cur.execute(
+            f"SELECT host_key, name, encrypted_value, path, is_secure, "
+            f"expires_utc, is_httponly, samesite "
+            f"FROM cookies WHERE {conditions}",
+            params,
+        )
+
+        pw_cookies = []
+        for host_key, name, enc_val, path, is_secure, expires_utc, is_httponly, samesite in cur.fetchall():
+            value = decrypt_cookie_value(enc_val, aes_key, meta_version)
+            if not value or not name or not host_key:
+                continue
+
+            samesite_map = {-1: "None", 0: "None", 1: "Lax", 2: "Strict"}
+            ss = samesite_map.get(samesite, "None")
+            secure = bool(is_secure)
+            if ss == "None":
+                secure = True
+
+            cookie = {
+                "name": name,
+                "value": value,
+                "domain": host_key,
+                "path": path or "/",
+                "secure": secure,
+                "httpOnly": bool(is_httponly),
+                "sameSite": ss,
+            }
+            if expires_utc and expires_utc != 0:
+                unix_epoch = (expires_utc / 1_000_000) - 11644473600
+                if unix_epoch > 0:
+                    cookie["expires"] = unix_epoch
+            pw_cookies.append(cookie)
+
+        conn.close()
+        return pw_cookies
+    finally:
+        os.unlink(tmp.name)
+
+def fetch_aws_resources():
+    """Fetch VPCs, Subnets, and IAM Roles via Boto3 to populate the GUI."""
+    try:
+        ec2 = boto3.client('ec2')
+        iam = boto3.client('iam')
+        vpcs = ec2.describe_vpcs()['Vpcs']
+        subnets = ec2.describe_subnets()['Subnets']
+        roles = iam.list_roles()['Roles']
+        return vpcs, subnets, roles
+    except Exception as e:
+        print(f"Error fetching AWS resources: {e}")
+        return [], [], []
+
+class DeploymentApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("AWS NEURAL DEPLOYER - V2")
+        self.geometry("800x900")
+        self.configure(bg=BG_DARK)
+
+        self.vpcs, self.subnets, self.roles = fetch_aws_resources()
+
+        self._setup_styles()
+        self.create_widgets()
+
+    def _setup_styles(self):
+        self.style = ttk.Style(self)
+        self.style.theme_use('clam')
+        
+        # Style Definitions
+        self.style.configure("TLabel", foreground=CYAN, background=BG_DARK, font=("Courier", 11, "bold"))
+        self.style.configure("TEntry", fieldbackground=BG_PANEL, foreground=WHITE, insertcolor=WHITE, borderwidth=1)
+        self.style.configure("TCombobox", fieldbackground=BG_PANEL, foreground=WHITE, arrowcolor=CYAN)
+        
+        # Override Combobox dropdown style
+        self.option_add("*TCombobox*Listbox.background", BG_PANEL)
+        self.option_add("*TCombobox*Listbox.foreground", CYAN)
+        self.option_add("*TCombobox*Listbox.selectBackground", DIM)
+        self.option_add("*TCombobox*Listbox.font", ("Courier", 10))
+
+    def create_widgets(self):
+        # Header
+        header_frame = tk.Frame(self, bg=BG_DARK)
+        header_frame.pack(fill="x", pady=(20, 10))
+        
+        tk.Label(header_frame, text="// AWS NEURAL DEPLOYER //", font=("Courier", 26, "bold"), fg=GREEN, bg=BG_DARK).pack()
+        tk.Frame(self, bg=MAGENTA, height=1).pack(fill="x", padx=100)
+
+        # Scrollable Form
+        canvas = tk.Canvas(self, bg=BG_DARK, highlightthickness=0)
+        scrollbar = tk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        self.scroll_frame = tk.Frame(canvas, bg=BG_DARK)
+
+        self.scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw", width=800)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True, padx=(40, 0))
+        scrollbar.pack(side="right", fill="y")
+
+        # --- SSO CONFIGURATION SECTION ---
+        sso_group = self._create_group("SESSION AUTH CONFIG")
+        
+        self._add_field(sso_group, "SSO START URL", "sso_url", "https://ssoins-72232e817ab17e56.portal.us-east-1.app.aws/#/?tab=accounts")
+        self._add_field(sso_group, "SSO USERNAME", "username", "akash_singh")
+        self._add_field(sso_group, "SSO PASSWORD (MASKED)", "password", "Akash@9769", show="*")
+        self._add_field(sso_group, "AWS REGION", "region", "us-east-1")
+
+        # --- DEPLOYMENT TARGET SECTION ---
+        target_group = self._create_group("DEPLOYMENT PARAMETERS")
+        
+        self._add_field(target_group, "ENVIRONMENT NAME", "env_name", "dev-neural")
+        self._add_field(target_group, "S3 TEMPLATE URL", "s3_url", "https://3-tier-advanced-template.s3.us-east-1.amazonaws.com/3-tier-advanced-template/root.yaml")
+
+        # VPC Selection
+        self._add_label(target_group, "TARGET VPC")
+        vpc_list = [f"{v.get('VpcId')} ({v.get('CidrBlock')})" for v in self.vpcs] or ["None found"]
+        self.vpc_combo = ttk.Combobox(target_group, values=vpc_list, state="readonly", width=60)
+        if vpc_list and vpc_list[0] != "None found": self.vpc_combo.current(0)
+        self.vpc_combo.pack(pady=(0, 15), anchor="w")
+
+        # Subnet Selection
+        self._add_label(target_group, "PRIMARY SUBNET")
+        subnet_list = [f"{s.get('SubnetId')} ({s.get('AvailabilityZone')})" for s in self.subnets] or ["None found"]
+        self.subnet_combo = ttk.Combobox(target_group, values=subnet_list, state="readonly", width=60)
+        if subnet_list and subnet_list[0] != "None found": self.subnet_combo.current(0)
+        self.subnet_combo.pack(pady=(0, 15), anchor="w")
+
+        # IAM Role Selection
+        self._add_label(target_group, "CLOUDFORMATION SERVICE ROLE")
+        role_list = sorted([r.get('RoleName') for r in self.roles]) or ["None found"]
+        self.role_combo = ttk.Combobox(target_group, values=role_list, state="readonly", width=60)
+        target_role = "Cloud_formation_full_admin_access_role"
+        if target_role in role_list:
+            self.role_combo.set(target_role)
+        elif role_list and role_list[0] != "None found":
+            self.role_combo.current(0)
+        self.role_combo.pack(pady=(0, 15), anchor="w")
+
+        # --- FOOTER ---
+        footer_frame = tk.Frame(self, bg=BG_DARK)
+        footer_frame.pack(fill="x", side="bottom", pady=20)
+        
+        self.deploy_btn = tk.Button(
+            footer_frame, text=">>> INITIATE NEURAL LINK <<<", 
+            command=self.on_deploy,
+            bg=BG_PANEL, fg=CYAN, 
+            activebackground=CYAN, activeforeground=BG_DARK,
+            font=("Courier", 14, "bold"),
+            padx=40, pady=15, borderwidth=2, relief="ridge"
+        )
+        self.deploy_btn.pack()
+
+    def _create_group(self, title):
+        frame = tk.LabelFrame(self.scroll_frame, text=f" {title} ", font=("Courier", 12, "bold"), fg=GREEN, bg=BG_DARK, labelanchor="n", padx=20, pady=20, borderwidth=1, relief="solid")
+        frame.pack(fill="x", padx=40, pady=15)
+        return frame
+
+    def _add_label(self, parent, text):
+        lbl = tk.Label(parent, text=f"> {text}", font=("Courier", 10, "bold"), fg=CYAN, bg=BG_DARK)
+        lbl.pack(anchor="w", pady=(5, 2))
+        return lbl
+
+    def _add_field(self, parent, label, attr_name, default_val, show=None):
+        self._add_label(parent, label)
+        entry = ttk.Entry(parent, width=65, show=show)
+        entry.insert(0, default_val)
+        entry.pack(pady=(0, 15), anchor="w")
+        setattr(self, f"{attr_name}_entry", entry)
+
+    def on_deploy(self):
+        data = {
+            "sso_url": self.sso_url_entry.get(),
+            "username": self.username_entry.get(),
+            "password": self.password_entry.get(),
+            "region": self.region_entry.get(),
+            "env_name": self.env_name_entry.get(),
+            "s3_url": self.s3_url_entry.get(),
+            "vpc_id": self.vpc_combo.get().split(' ')[0] if self.vpc_combo.get() != "None found" else "",
+            "subnet_id": self.subnet_combo.get().split(' ')[0] if self.subnet_combo.get() != "None found" else "",
+            "role_name": self.role_combo.get()
+        }
+
+        if any(not v for k, v in data.items() if k not in ["vpc_id", "subnet_id"]):
+            messagebox.showerror("CRITICAL ERROR", "MISSING ESSENTIAL NEURAL PARAMETERS.")
+            return
+
+        self.destroy()
+        start_automation(data)
+
+def start_automation(data):
+    """Integrates SSO Login, Role Selection, and CloudFormation Automation."""
+    print(f"Connecting to Neural Network...")
+    
+    cookies = extract_chrome_cookies()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, args=["--window-size=1440,900"])
+        context = browser.new_context(viewport={"width": 1440, "height": 900})
+        
+        if cookies:
+            context.add_cookies(cookies)
+            print("Session cookies injected.")
+
+        page = context.new_page()
+        
+        # 1. SSO LOGIN FLOW
+        print(f"Navigating to SSO Portal: {data['sso_url']}")
+        page.goto(data['sso_url'])
+        
+        try:
+            # Check if we need to login
+            page.wait_for_selector('text="DreamerX0"', timeout=10000)
+            print("Session resumed successfully.")
+        except:
+            print("Session expired. Initiating automated login...")
+            try:
+                page.fill('input[type="text"], input[name="username"]', data['username'])
+                page.click('button:has-text("Next"), button:has-text("Continue")')
+                page.wait_for_selector('input[type="password"]')
+                page.fill('input[type="password"]', data['password'])
+                page.click('button:has-text("Sign in")')
+                
+                # Check for MFA
+                try:
+                    page.wait_for_selector('text="DreamerX0"', timeout=15000)
+                except:
+                    print("\n" + "!"*60)
+                    print("MFA CHALLENGE DETECTED. PLEASE COMPLETE MANUALLY.")
+                    print("!"*60 + "\n")
+                    page.wait_for_selector('text="DreamerX0"', timeout=60000)
+            except Exception as e:
+                print(f"Login failure: {e}")
+
+        # 2. ACCOUNT & ROLE SELECTION
+        print("Selecting AWS Account and AdministratorAccess...")
+        page.click('text="DreamerX0"')
+        with context.expect_page() as new_page_info:
+            page.click('text="AdministratorAccess"')
+        
+        console_page = new_page_info.value
+        console_page.set_default_timeout(60000)
+        
+        # 3. CLOUDFORMATION AUTOMATION
+        cf_url = f"https://{data['region']}.console.aws.amazon.com/cloudformation/home?region={data['region']}#/stacks/create"
+        print(f"Initiating CloudFormation Link: {cf_url}")
+        console_page.goto(cf_url)
+        
+        # Step 1: Template
+        console_page.wait_for_selector('label:has-text("Amazon S3 URL")')
+        console_page.locator('label:has-text("Amazon S3 URL")').click()
+        console_page.locator('input[placeholder="S3 URL"]').fill(data['s3_url'])
+        console_page.locator('button:has-text("Next")').click()
+        
+        # Step 2: Details
+        console_page.wait_for_selector('input[id*="stackName"]')
+        console_page.fill('input[id*="stackName"]', f"Auto-{data['env_name']}-{int(time.time())}")
+        
+        # Fill Parameters
+        console_page.wait_for_timeout(2000)
+        if data['vpc_id']:
+            for f in console_page.locator('input[id*="VpcId"]').all(): 
+                if f.is_visible(): f.fill(data['vpc_id'])
+        if data['subnet_id']:
+            for f in console_page.locator('input[id*="SubnetId"]').all(): 
+                if f.is_visible(): f.fill(data['subnet_id'])
+        
+        env_f = console_page.locator('input[id*="EnvironmentName"]')
+        if env_f.count() > 0: env_f.first.fill(data['env_name'])
+        
+        console_page.locator('button:has-text("Next")').click()
+        
+        # Step 3: Configure options (Role Selection)
+        print(f"Applying Execution Role: {data['role_name']}")
+        console_page.wait_for_selector('text="Permissions"')
+        
+        # Scroll to ensure role selector is visible
+        console_page.evaluate("window.scrollBy(0, 500)")
+        
+        role_selector = console_page.locator('input[placeholder*="Choose a role"], input[placeholder*="Role name"]').first
+        if role_selector.is_visible():
+            role_selector.fill(data['role_name'])
+            console_page.wait_for_timeout(1500)
+            try:
+                console_page.locator(f'text="{data['role_name']}"').first.click()
+                print("Role selected successfully.")
+            except:
+                print("Manual role selection required.")
+
+        print("\n" + "="*60)
+        print("DEPLOYMENT READY FOR FINAL COMMIT")
+        print("="*60)
+        print("Review all parameters in the browser window.")
+        print("Manual verification recommended before clicking 'Submit'.")
+        print("="*60 + "\n")
+        
+        console_page.pause()
+        browser.close()
+
+if __name__ == "__main__":
+    app = DeploymentApp()
+    app.mainloop()
