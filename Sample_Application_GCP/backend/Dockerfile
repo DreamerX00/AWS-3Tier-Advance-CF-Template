@@ -6,13 +6,12 @@ WORKDIR /app
 # Copy source and build
 COPY settings.gradle.kts build.gradle.kts ./
 COPY src/ src/
-RUN --mount=type=cache,target=/home/gradle/.gradle \
-    sh -c 'for attempt in 1 2 3; do \
-      gradle bootJar -x test --no-daemon && exit 0; \
-      echo "Gradle build failed on attempt ${attempt}; retrying after transient dependency/network error..."; \
-      sleep 5; \
-    done; \
-    exit 1'
+RUN sh -c 'for attempt in 1 2 3; do \
+  gradle bootJar -x test --no-daemon && exit 0; \
+  echo "Gradle build failed on attempt ${attempt}; retrying after transient dependency/network error..."; \
+  sleep 5; \
+done; \
+exit 1'
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
