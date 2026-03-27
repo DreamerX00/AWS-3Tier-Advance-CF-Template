@@ -1,10 +1,36 @@
 # Ignore all markdown files
 *.md
 **/*.md
-.venv/*
+
+# Local Python environments and caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+# Local-only app environment files
+*.env
+.env
+.env.*
+
+# Frontend dependencies and build outputs
+**/node_modules/
+**/dist/
+
+# Java/Gradle build outputs and local caches
+**/build/
+**/.gradle/
+**/.gradle-home/
+
+# Editor / OS noise
+**/.idea/
+*.iml
+.DS_Store
+
 ./sample_playwright_and_tkinter/*
+
 # Except the root README
 !README.md
 !GETTING_STARTED.md
 !MasterClass/*.md
-
