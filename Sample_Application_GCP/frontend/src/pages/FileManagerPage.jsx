@@ -104,15 +104,15 @@ export default function FileManagerPage() {
         }
     };
 
-    const handleDownload = (s3Key, fileName) => {
+    const handleDownload = (gcsObjectName, fileName) => {
         const baseUrl = import.meta.env.VITE_API_URL || '';
-        window.open(`${baseUrl}/api/files/download/${s3Key}`, '_blank');
+        window.open(`${baseUrl}/api/files/download/${gcsObjectName}`, '_blank');
     };
 
     const totalSize = summary?.totalBytes ?? files.reduce((acc, file) => acc + (file.fileSize || 0), 0);
     const totalFiles = summary?.totalFiles ?? files.length;
     const recentUploads = summary?.recentUploads?.length ?? 0;
-    const primaryStorage = Object.entries(summary?.storageTypeBreakdown || {})[0]?.[0] || 'S3';
+    const primaryStorage = Object.entries(summary?.storageTypeBreakdown || {})[0]?.[0] || 'GCS';
 
     return (
         <Box>
@@ -245,7 +245,7 @@ export default function FileManagerPage() {
                                     <TableCell>Size</TableCell>
                                     <TableCell>Uploaded By</TableCell>
                                     <TableCell>Storage</TableCell>
-                                    <TableCell>S3 Key</TableCell>
+                                    <TableCell>GCS Object</TableCell>
                                     <TableCell align="right">Actions</TableCell>
                                 </TableRow>
                             </TableHead>
@@ -279,12 +279,12 @@ export default function FileManagerPage() {
                                         </TableCell>
                                         <TableCell>
                                             <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', fontSize: '0.65rem' }}>
-                                                {file.s3Key?.substring(0, 20)}...
+                                                {file.gcsObjectName?.substring(0, 20)}...
                                             </Typography>
                                         </TableCell>
                                         <TableCell align="right">
                                             <Tooltip title="Download">
-                                                <IconButton size="small" onClick={() => handleDownload(file.s3Key, file.fileName)}
+                                                <IconButton size="small" onClick={() => handleDownload(file.gcsObjectName, file.fileName)}
                                                     sx={{ color: '#3B82F6' }}>
                                                     <Download fontSize="small" />
                                                 </IconButton>

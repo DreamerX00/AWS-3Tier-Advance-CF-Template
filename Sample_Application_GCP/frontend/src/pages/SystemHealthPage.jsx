@@ -86,7 +86,7 @@ export default function SystemHealthPage() {
                             }}
                         />
                         <Typography variant="body2" color="text.secondary">
-                            Service: {summary?.service || 'AWS Practice Backend'}
+                            Service: {summary?.service || 'GCP Practice Backend'}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
                             Last reported: {summary?.generatedAt || 'n/a'}

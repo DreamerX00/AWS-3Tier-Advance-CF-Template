@@ -1,0 +1,26 @@
+service: backend
+runtime: custom
+env: flex
+
+automatic_scaling:
+  min_num_instances: 1
+  max_num_instances: 2
+
+resources:
+  cpu: 1
+  memory_gb: 2
+  disk_size_gb: 10
+
+env_variables:
+  SPRING_DATASOURCE_URL: "jdbc:postgresql:///mydb?socketFactory=com.google.cloud.sql.postgres.SocketFactory&cloudSqlInstance=myfirst-491117:asia-south1:sample-db"
+  CLOUD_SQL_CONNECTION_NAME: "myfirst-491117:asia-south1:sample-db"
+  POSTGRES_HOST: "10.117.128.3"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "mydb"
+  POSTGRES_USER: "postgres"
+  POSTGRES_PASSWORD: "YOUR_POSTGRES_PASSWORD"
+  CORS_ORIGINS: "https://frontend-dot-myfirst-491117.el.r.appspot.com"
+  GCP_PROJECT_ID: "myfirst-491117"
+  STORAGE_BUCKET_NAME: "YOUR_GCS_BUCKET"
+  STORAGE_AUTO_CREATE_BUCKET: "false"
+  GCS_ENDPOINT: ""
